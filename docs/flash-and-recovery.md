@@ -1,7 +1,36 @@
 # Flash and recovery
 
-**Nothing in this document has been executed on the phone yet.** Read the whole thing before
-the first flash.
+**Nothing has been flashed to the phone.** A 69 Hz boot image exists and `fastboot boot` is
+confirmed working on this unit (the backup image was RAM-booted via the Pixel). Test with
+`fastboot boot` first; only flash once it is proven.
+
+## Test first: RAM boot (writes nothing)
+
+Image: `https://github.com/deviknitkkr/rmx1821-kernel-ci/releases/download/boot-69hz-v1/boot-69hz-magisk.img`
+
+sha256: `7c5975d481c4d1299367e254809afba2301c8d7adb8dec0e8e66b4ecf4d568bd`
+
+Download it on the **host** (Pixel/PC), then:
+
+```bash
+# phone: su -c 'reboot bootloader'   (or Vol Up + Vol Down + Power)
+fastboot boot boot-69hz-magisk.img
+```
+
+- nothing is written; a normal reboot returns to the current kernel
+- Magisk comes up from the image's ramdisk, so root works
+- if the panel refuses the timing, power-cycle; the boot partition is untouched
+
+Checks once it boots:
+
+```bash
+# Developer options -> Show refresh rate  (expect ~69)
+dumpsys display | grep supportedModes
+dumpsys SurfaceFlinger | grep -E "VSYNC period|primary range"
+su -c 'dmesg | grep -iE "disagrees about version|unknown symbol"'
+```
+
+Wi-Fi working is the quick proof that vendor modules still load.
 
 ## Backups (public, no auth)
 
@@ -47,10 +76,11 @@ The kernel-only artifact is still available as `-n Image-69hz`
 
 ## 2. Get a flashable boot image
 
-### Option A — use the CI-repacked image (default)
+### Option A — use the prebuilt image (default)
 
-`boot-out/boot.img` already has the new kernel inside the Magisk-patched boot, and the CI
-verified `.backup`, the kernel contents and the 32 MiB limit.
+`boot-69hz-magisk.img` from release `boot-69hz-v1`, or `boot.img` from the CI artifact
+`boot-69hz-magisk`, already has the new kernel inside the Magisk-patched boot. The CI/local
+repack verified `.backup`, the kernel contents and the 32 MiB limit.
 
 One extra check: confirm the base it was built from is still the boot partition the phone
 runs. The release asset's hash is

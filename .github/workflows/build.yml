@@ -260,11 +260,12 @@ jobs:
           echo "--- header ---"
           ../magiskboot unpack -h boot.img
 
-          test "$(../magiskboot cpio ramdisk.cpio 'exists .backup')" = "true"
+          # rc=0 only if the entry exists (this magiskboot prints nothing).
+          ../magiskboot cpio ramdisk.cpio "exists .backup"
           echo "magisk .backup: present"
 
-          # magiskboot may recompress the kernel blob; compare contents.
-          K1=$(gzip -dc kernel | sha256sum | cut -d' ' -f1)
+          # magiskboot unpack writes the raw (decompressed) kernel blob.
+          K1=$(sha256sum kernel | cut -d' ' -f1)
           K2=$(gzip -dc ../in/Image.gz | sha256sum | cut -d' ' -f1)
           echo "kernel(inside)=$K1"
           echo "Image.gz     =$K2"

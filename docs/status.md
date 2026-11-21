@@ -16,8 +16,11 @@ Last updated: 2026-11-21.
 | CI pipeline | working (3 runs to green) |
 | Kernel built successfully | yes, but the first green build was **4.14.282** — discarded |
 | Kernel built at **4.14.235** | yes — run `44923932703`, release `4.14.235-M.A.P` |
-| Boot image repacked in CI | job added; next run produces `boot-69hz-magisk` |
-| **Flashed to the phone** | **not yet — phone is still on stock kernel** |
+| Boot image repacked | yes — `boot-69hz-magisk.img`, 32 MiB, sha256 `7c5975d4…4d568bd` |
+| Published for testing | release **`boot-69hz-v1`** (public) |
+| `fastboot boot` supported on this unit | **yes** — confirmed with the backup image |
+| RAM-boot test of 69 Hz | pending |
+| Flashed permanently | not yet |
 
 Nothing on the device has changed. The phone still runs `4.14.235-M.A.P` at 60 Hz.
 
@@ -52,15 +55,19 @@ Nothing on the device has changed. The phone still runs `4.14.235-M.A.P` at 60 H
    That image is ABI-adjacent to the wrong kernel and **must not be flashed**. The same run
    also revealed 31,256 bogus `-Wunknown-warning-option` lines from the GCC-style
    `-Werror-implicit-function-declaration` spelling.
-9. **Run `44923932703` — SUCCESS** in 8m27s, pinned source. `kernel.release` is exactly
-   **`4.14.235-M.A.P`**; `report.txt` shows `vertical_frontporch = 16`, `PLL_CLOCK = 360`
-   (the 365 line is the inactive command-mode branch); `Image.gz` sha256
-   `0c95d4f0…d9f1f8`. Two cosmetic bugs remained: 31k `-Wunknown-warning-option` lines (the
-   demotion had disabled `-Werror=unknown-warning-option`, which `cc-option` needs to reject
-   GCC-only flags) and `.config` missing from the artifact (dotfile excluded by
-   `upload-artifact`). Both fixed; `include-hidden-files: true` added.
-10. **Next run — pending** (`variant=69`), with the `repack` job: builds, repacks into the
-    Magisk boot, verifies `.backup`/kernel bytes/32 MiB, uploads `boot-69hz-magisk`.
+10. **Run `44923932703` — SUCCESS** in 8m27s, pinned source. `kernel.release` is exactly
+    **`4.14.235-M.A.P`**; `report.txt` shows `vertical_frontporch = 16`, `PLL_CLOCK = 360`
+    (the 365 line is the inactive command-mode branch); `Image.gz` sha256
+    `0c95d4f0…d9f1f8`. The same run revealed two cosmetic bugs (31k unknown-warning lines
+    from the demoted `-Werror=unknown-warning-option`; `.config` dropped as a dotfile), both
+    fixed.
+11. **Local repack (69 Hz).** `magiskboot` v31.1, base = the live Magisk boot. Kernel blob
+    10,322,730 → 10,976,604 bytes; ramdisk **byte-identical** (`44bb37db…d855`),
+    `.backup`/`overlay.d` intact; image exactly 32 MiB. Raw kernel sha256 `4d20949e…7f4071`.
+    Published as release **`boot-69hz-v1`**, sha256 `7c5975d4…4d568bd`.
+12. **`fastboot boot` confirmed working on this unit** — the backup image was RAM-booted via
+    the Pixel. This is now the primary test path: nothing is written, a normal reboot
+    returns to the current kernel.
 
 Check it with:
 
@@ -128,17 +135,20 @@ Empty → fine. If not, the build drifted from the defconfig; rebuild with
 
 ## Next concrete steps
 
-1. Wait for run `44923932703`; it must report `4.14.235-M.A.P` or it fails by design.
-2. Download `Image-69hz`; compare the artifact `.config` with
-   `~/rmx1821-backup/running.config` (from `/proc/config.gz`) — only `CONFIG_COMPAT_VDSO`
-   should differ.
-3. Repack against `boot_current_magisk_RMX1821.img`; run the three verification checks.
-4. **Test without writing:** `fastboot boot new-boot-69hz.img` if LK supports it (confirm
-   first with the current image — zero risk either way). Check the refresh overlay.
-5. If `fastboot boot` is unsupported: upload the repacked image as a release asset, then
-   flash 69 Hz with `dd`, release backup ready.
-6. Only after 69 Hz is confirmed, build/test 72.
-7. Record results here.
+1. Download on the **Pixel**: `boot-69hz-magisk.img` from release `boot-69hz-v1`
+   (`…/releases/download/boot-69hz-v1/boot-69hz-magisk.img`, sha256 `7c5975d4…`).
+2. Reboot the phone to bootloader (`su -c 'reboot bootloader'`) and run
+   `fastboot boot boot-69hz-magisk.img`. Nothing is written.
+3. Check: boot logo, lock screen, then
+   - Developer options → Show refresh rate (expect ~69)
+   - `dumpsys display | grep supportedModes`
+   - `dumpsys SurfaceFlinger | grep -E "VSYNC period|primary range"`
+   - Wi-Fi on (proves vendor modules loaded)
+   - `su -c 'dmesg | grep -iE "disagrees about version|unknown symbol"'`
+4. A normal reboot returns to the untouched `boot` partition. Report the result and it goes
+   in this file.
+5. If 69 is good, build/test 72 (`variant=72`); if the overlay still says 60, stop and
+   inspect the HWC reporting path before any permanent flash.
 
 ## Pre-flash testing (what is and isn't possible)
 
