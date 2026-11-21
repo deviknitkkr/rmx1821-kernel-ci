@@ -1,0 +1,80 @@
+name: build-kernel
+
+# Builds the RMX1821 (Realme 3) kernel with a raised panel refresh rate.
+# Nothing here touches the device; it only produces Image.gz.
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: "69 = vfp only (no PLL change), 72 = vfp + PLL 376"
+        type: choice
+        options: ["69", "72"]
+        default: "69"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # arm64 hosted runner: native aarch64 clang, no cross-compile target games.
+    # Free for public repos. If the label is unavailable, swap to ubuntu-24.04
+    # and add gcc-aarch64-linux-gnu + --target handling.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            build-essential bc bison flex python3 device-tree-compiler \
+            libssl-dev clang lld llvm
+
+      - name: Fetch kernel source
+        run: |
+          git clone --depth=1 -b M.A.P \
+            https://github.com/Maanush2004/android_kernel_realme_RMX1821 src
+
+      - name: Patch panel timing
+        working-directory: src
+        env:
+          VARIANT: ${{ inputs.variant }}
+        run: |
+          F=drivers/misc/mediatek/lcm/ili9881_hd_dsi_vdo_qc_inx_zal1810/ili9881_hd_dsi_vdo_qc_inx_zal1810.c
+          sed -i 's/params->dsi.vertical_frontporch = 236;/params->dsi.vertical_frontporch = 16;/' "$F"
+          if [ "$VARIANT" = "72" ]; then
+            sed -i 's/params->dsi.PLL_CLOCK = 360;/params->dsi.PLL_CLOCK = 376;/' "$F"
+          fi
+          echo "=== effective values ==="
+          grep -nE "vertical_frontporch = |PLL_CLOCK = " "$F"
+
+      - name: Build Image.gz
+        working-directory: src
+        run: |
+          export ARCH=arm64
+          export CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm
+          export OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
+          # old tree, modern clang: demote diagnostics that clang 16+ made errors
+          export KCFLAGS="-Wno-error=implicit-function-declaration \
+          -Wno-error=implicit-int -Wno-error=incompatible-pointer-types \
+          -Wno-error=int-conversion -Wno-error=return-type \
+          -Wno-error=macro-redefined -Wno-error=array-bounds"
+
+          make O=out RMX1821_defconfig
+          make O=out -j"$(nproc)" Image.gz
+
+          echo "=== kernel release (must be 4.14.235-M.A.P) ==="
+          cat out/include/config/kernel.release
+          echo "=== output ==="
+          ls -lh out/arch/arm64/boot/Image.gz
+          sha256sum out/arch/arm64/boot/Image.gz
+
+      - name: Upload Image.gz
+        uses: actions/upload-artifact@v4
+        with:
+          name: Image-${{ inputs.variant }}hz
+          path: src/out/arch/arm64/boot/Image.gz
+          if-no-files-found: error
