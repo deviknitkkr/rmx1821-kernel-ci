@@ -41,8 +41,8 @@ Nothing on the device has changed. The phone still runs `4.14.235-M.A.P` at 60 H
    DTB step died on `../scripts/dtc/dtc_overlay: Exec format error` — MTK ships that tool as
    a prebuilt **x86-64** binary. Fix: point `cmd_dtc` at kbuild's own host-arch `dtc`
    (`$(objtree)/scripts/dtc/dtc`).
-8. **Next run — pending** (`variant=69`), with the `dtc_overlay` fix and log noise reduction
-   (`-Wno-strict-prototypes` etc., plus a warning-category summary).
+8. **Run `44922739630` — in progress** (`variant=69`), with the `dtc_overlay` fix and log noise
+   reduction (`-Wno-strict-prototypes` etc., plus a warning-category summary).
 
 Check it with:
 
