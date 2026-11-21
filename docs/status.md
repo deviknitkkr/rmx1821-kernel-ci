@@ -9,8 +9,9 @@ Last updated: 2026-11-21.
 | Panel identified | done |
 | Timing patch written | done |
 | Backups dumped + published | done (`backup-v1` release) |
-| CI pipeline | iterating (3rd run in progress) |
-| Kernel built successfully | **not yet** |
+| CI pipeline | working (3 runs to green) |
+| Kernel built successfully | yes, but the first green build was **4.14.282** — discarded |
+| Kernel built at **4.14.235** | run `44923932703` in progress |
 | Boot image repacked | not yet |
 | **Flashed to the phone** | **not yet — phone is still on stock kernel** |
 
@@ -41,8 +42,16 @@ Nothing on the device has changed. The phone still runs `4.14.235-M.A.P` at 60 H
    DTB step died on `../scripts/dtc/dtc_overlay: Exec format error` — MTK ships that tool as
    a prebuilt **x86-64** binary. Fix: point `cmd_dtc` at kbuild's own host-arch `dtc`
    (`$(objtree)/scripts/dtc/dtc`).
-8. **Run `44922739630` — in progress** (`variant=69`), with the `dtc_overlay` fix and log noise
-   reduction (`-Wno-strict-prototypes` etc., plus a warning-category summary).
+8. **Run `44922739630` — SUCCESS** in 9m02s. Produced `Image.gz` (11 MB,
+   sha256 `b63cdfb6…bdee8c`). **But** `out/include/config/kernel.release` was
+   `4.14.282-M.A.P`, not `4.14.235-M.A.P`: the `M.A.P` branch has been updated since 2021.
+   That image is ABI-adjacent to the wrong kernel and **must not be flashed**. The same run
+   also revealed 31,256 bogus `-Wunknown-warning-option` lines from the GCC-style
+   `-Werror-implicit-function-declaration` spelling.
+9. **Run `44923932703` — in progress** (`variant=69`). Source pinned to commit
+   `68d7a37a267743f12ac7d85054fea74564b8f7ea` (`SUBLEVEL = 235`, 2021-06-21). The build now
+   aborts unless the release string is exactly `4.14.235-M.A.P`, and the artifact includes
+   `.config` and `report.txt` (panel timing + `__crc_*` dump) for on-device verification.
 
 Check it with:
 
@@ -63,6 +72,9 @@ gh run view <id> --repo deviknitkkr/rmx1821-kernel-ci --log-failed
 
 **Assumed, not yet observed**
 
+- that commit `68d7a37a…` is the *exact* source of the running kernel — inferred from
+  `SUBLEVEL = 235`, the `-M.A.P` localversion and the 2021-06-21 build timestamp. The
+  `.config` diff against `/proc/config.gz` is the confirming check.
 - that cutting `vfp` to 16 is accepted by the ILI9881 controller
 - that 69–72 Hz is stable (no flicker, no dropped lines)
 - that MTK HWC reports the new rate to SurfaceFlinger
@@ -107,13 +119,33 @@ Empty → fine. If not, the build drifted from the defconfig; rebuild with
 
 ## Next concrete steps
 
-1. Wait for run `44921708014`; if it fails, read `--log-failed`, fix, push, re-run.
-2. Download `Image-69hz`; confirm `kernel.release == 4.14.235-M.A.P`.
+1. Wait for run `44923932703`; it must report `4.14.235-M.A.P` or it fails by design.
+2. Download `Image-69hz`; compare the artifact `.config` with
+   `~/rmx1821-backup/running.config` (from `/proc/config.gz`) — only `CONFIG_COMPAT_VDSO`
+   should differ.
 3. Repack against `boot_current_magisk_RMX1821.img`; run the three verification checks.
-4. Upload the finished `new-boot-69hz.img` as a release asset so the Pixel can fetch it
-   without auth and so the recovery path is one file.
-5. Flash **69 Hz first** (no DSI link change). Test. Only then consider 72.
-6. Record results here.
+4. **Test without writing:** `fastboot boot new-boot-69hz.img` if LK supports it (confirm
+   first with the current image — zero risk either way). Check the refresh overlay.
+5. If `fastboot boot` is unsupported: upload the repacked image as a release asset, then
+   flash 69 Hz with `dd`, release backup ready.
+6. Only after 69 Hz is confirmed, build/test 72.
+7. Record results here.
+
+## Pre-flash testing (what is and isn't possible)
+
+- **`fastboot boot <image>`** — loads into RAM, writes nothing. Best test: covers panel lock,
+  HWC reporting, and module loading. Support varies by Realme LK build; try with the current
+  image first.
+- **Config diff** — running `/proc/config.gz` (5075 lines) vs artifact `.config`.
+- **Module CRC check** — `report.txt` lists every `__crc_*` in `vmlinux`; compare against the
+  `__versions` section of `/vendor/lib/modules/*.ko` (`wlan_drv_gen3.ko`, `fpsgo.ko`,
+  `met.ko`, …).
+- **Differential build** — build a stock-timing control and diff `objdump -d vmlinux`;
+  differences should be confined to `lcm_get_params`.
+- **kexec** — unavailable: `# CONFIG_KEXEC is not set`.
+- **QEMU** — cannot emulate the MT6771 DSI panel; at most proves the image decompresses.
+- **Recovery-mode boot** — the kernel comes from `boot`, not `recovery`, so this changes
+  nothing.
 
 ## Things deliberately *not* tried
 
