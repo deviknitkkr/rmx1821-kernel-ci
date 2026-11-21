@@ -33,10 +33,11 @@ gh run download <run-id> --repo deviknitkkr/rmx1821-kernel-ci -n Image-69hz -D ~
 1. `actions/checkout@v4` — gets the workflow + docs.
 2. Installs `clang`, `lld`, `llvm`, `binutils`, `bc`, `bison`, `flex`, `dtc`, `python3`,
    `build-essential`. Creates `aarch64-linux-gnu-*` symlinks if the image lacks them.
-3. Shallow-clones `Maanush2004/android_kernel_realme_RMX1821` branch `M.A.P`.
+3. Checks out the kernel at the **pinned commit** `68d7a37a…` (sublevel 235). The `M.A.P`
+   branch tip is now 4.14.282, which would not match the phone's vendor modules.
 4. Patches (see below).
 5. Builds `Image.gz` with `make ... Image.gz` (no modules).
-6. Uploads `Image.gz` as an artifact.
+6. Uploads `Image.gz`, `.config` and `report.txt` as an artifact.
 
 Runner: `ubuntu-24.04-arm` (native aarch64; free for public repos). If that label ever
 disappears, switch to `ubuntu-24.04` and add `gcc-aarch64-linux-gnu` plus an explicit
@@ -133,6 +134,34 @@ sed -i 's#$(srctree)/scripts/dtc/dtc_overlay#$(objtree)/scripts/dtc/dtc#' script
 ```
 
 `objtree` is the `O=out` directory, so this resolves to `out/scripts/dtc/dtc`.
+
+### 5. The `M.A.P` branch no longer matches the phone
+
+The first successful build produced `4.14.282-M.A.P`. The phone runs `4.14.235-M.A.P`
+(built 2021-06-21). Stable updates move `struct module`, exported symbol sets and CRCs, so
+an image from the tip is not a safe drop-in. The fix is to pin the commit whose `Makefile`
+says `SUBLEVEL = 235`:
+
+```
+68d7a37a267743f12ac7d85054fea74564b8f7ea
+```
+
+The workflow checks that commit out and the build step aborts unless
+`out/include/config/kernel.release` is exactly `4.14.235-M.A.P`. This is also why the
+artifact now includes `.config` and `report.txt` — the config can be diffed against the
+phone's `/proc/config.gz` before anything is flashed.
+
+### 6. `-Werror-implicit-function-declaration` (hyphen, not `=`)
+
+The top Makefile contains this GCC-style spelling. A naive
+`s/-Werror/-Wno-error/g` turns it into `-Wno-error-implicit-function-declaration`, which
+clang does not understand, so **every** object emits one `-Wunknown-warning-option` —
+31,256 lines in the log. Convert the hyphen form to the `=` form first:
+
+```bash
+sed -i -e 's/-Werror-\([a-zA-Z0-9_-]*\)/-Wno-error=\1/g' \
+       -e 's/-Werror/-Wno-error/g' <files>
+```
 
 ### Harmless warning
 

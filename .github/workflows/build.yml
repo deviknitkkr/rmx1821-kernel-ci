@@ -41,10 +41,23 @@ jobs:
           echo "as:    $(aarch64-linux-gnu-as --version | head -1)"
           echo "lld:   $(ld.lld --version)"
 
-      - name: Fetch kernel source
+      - name: Fetch kernel source (pinned)
+        uses: actions/checkout@v4
+        with:
+          repository: Maanush2004/android_kernel_realme_RMX1821
+          ref: 68d7a37a267743f12ac7d85054fea74564b8f7ea
+          path: src
+          fetch-depth: 1
+
+      - name: Verify source baseline
+        working-directory: src
         run: |
-          git clone --depth=1 -b M.A.P \
-            https://github.com/Maanush2004/android_kernel_realme_RMX1821 src
+          # The M.A.P branch has moved on (it now reports 4.14.282). The phone
+          # runs 4.14.235 built 2021-06-21, which is this commit. Pinning it is
+          # what keeps vendor module CRCs and vermagic in the same family.
+          grep -E "^SUBLEVEL" Makefile
+          grep -qE "^SUBLEVEL = 235$" Makefile || {
+            echo "source is not 4.14.235 — refusing to build"; exit 1; }
 
       - name: Patch config and panel timing
         working-directory: src
@@ -56,8 +69,16 @@ jobs:
           # the top Makefile forces -Werror=strict-prototypes etc. clang 12 did
           # not flag those; clang 18+ does. Demote every -Werror to -Wno-error.
           # This changes no generated code, no ABI, no vermagic.
+          #
+          # The first expression matters: the GCC-style hyphen spelling
+          # `-Werror-implicit-function-declaration` must become
+          # `-Wno-error=implicit-function-declaration`; leaving it as
+          # `-Wno-error-implicit-...` makes clang emit 31k
+          # -Wunknown-warning-option lines, one per object.
           grep -rl --include='Makefile' --include='Kbuild' --include='*.mk' -- '-Werror' . \
-            | xargs -r sed -i 's/-Werror/-Wno-error/g'
+            | xargs -r sed -i \
+                -e 's/-Werror-\([a-zA-Z0-9_-]*\)/-Wno-error=\1/g' \
+                -e 's/-Werror/-Wno-error/g'
           echo "remaining -Werror occurrences: $(grep -rl --include='Makefile' --include='Kbuild' --include='*.mk' -- '-Werror' . | wc -l)"
 
           # MTK checks in a prebuilt x86-64 scripts/dtc/dtc_overlay. On an arm64
@@ -90,6 +111,8 @@ jobs:
 
       - name: Build Image.gz
         working-directory: src
+        env:
+          VARIANT: ${{ inputs.variant }}
         run: |
           # MUST be make arguments. Environment variables lose to the kernel's
           # own assignments (CC = $(CROSS_COMPILE)gcc).
@@ -130,15 +153,40 @@ jobs:
             exit "$rc"
           fi
 
+          REL=$(cat out/include/config/kernel.release)
           echo "=== kernel release (expect 4.14.235-M.A.P) ==="
-          cat out/include/config/kernel.release
+          echo "$REL"
+          if [ "$REL" != "4.14.235-M.A.P" ]; then
+            echo "release mismatch: $REL — this image must not be flashed"
+            exit 1
+          fi 
+
           echo "=== output ==="
           ls -lh out/arch/arm64/boot/Image.gz
           sha256sum out/arch/arm64/boot/Image.gz
+
+          # Small report so the config and module ABI can be checked on-device
+          # without downloading the whole build tree.
+          F=drivers/misc/mediatek/lcm/ili9881_hd_dsi_vdo_qc_inx_zal1810/ili9881_hd_dsi_vdo_qc_inx_zal1810.c
+          {
+            echo "release: $REL"
+            echo "variant: ${VARIANT:-69}"
+            echo "image_sha256: $(sha256sum out/arch/arm64/boot/Image.gz | cut -d' ' -f1)"
+            echo "defconfig_sha256: $(sha256sum arch/arm64/configs/RMX1821_defconfig | cut -d' ' -f1)"
+            echo "--- panel timing ---"
+            grep -nE "vertical_frontporch = |PLL_CLOCK = " "$F" || true
+            echo "--- exported symbol CRCs (__crc_*) ---"
+            nm out/vmlinux 2>/dev/null | awk '$2 ~ /^[Aa]$/ && $3 ~ /^__crc_/ {print substr($3,7), $1}' | sort || true
+          } > report.txt
+          wc -l report.txt
+          echo "crc symbols: $(awk '/^--- exported symbol CRCs/{f=1;next} f' report.txt | wc -l)"
 
       - name: Upload Image.gz
         uses: actions/upload-artifact@v4
         with:
           name: Image-${{ inputs.variant }}hz
-          path: src/out/arch/arm64/boot/Image.gz
+          path: |
+            src/out/arch/arm64/boot/Image.gz
+            src/out/.config
+            src/report.txt
           if-no-files-found: error

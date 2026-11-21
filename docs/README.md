@@ -46,13 +46,17 @@ docs/                         this handoff
 README.md                     short pointer
 ```
 
-Kernel source is **not** vendored here. The workflow shallow-clones:
+Kernel source is **not** vendored here. The workflow checks out a **pinned commit**:
 
 ```
-https://github.com/Maanush2004/android_kernel_realme_RMX1821   branch: M.A.P
+https://github.com/Maanush2004/android_kernel_realme_RMX1821
+commit 68d7a37a267743f12ac7d85054fea74564b8f7ea   (sublevel 235, 2021-06-21)
 ```
 
-That branch matches the phone's running kernel `4.14.235-M.A.P` exactly.
+The `M.A.P` branch has moved on — its current tip reports `4.14.282`, while the phone runs
+`4.14.235`. Building the tip would put the kernel in a different vermagic/CRC family from
+the vendor modules, so the commit is pinned and the build fails if the release string is
+anything other than `4.14.235-M.A.P`.
 
 ---
 
