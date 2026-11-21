@@ -18,13 +18,16 @@ Last updated: 2026-11-21.
 | Kernel built at **4.14.235** | yes — run `44923932703`, release `4.14.235-M.A.P` |
 | Boot image repacked | yes — `boot-69hz-magisk.img`, 32 MiB, sha256 `7c5975d4…4d568bd` |
 | Published for testing | release **`boot-69hz-v1`** (public) |
-| `fastboot boot` actually loads the image | **unverified** — the backup test couldn't prove it (byte-identical to the boot partition); marker test pending |
-| RAM-boot attempt of 69 Hz | fell back to stock (`bootreason=lk_crash`); boot partition unchanged |
+| `fastboot boot` actually loads the image | **unverified** — the backup test couldn't prove it (byte-identical to the boot partition); marker test still pending |
+| First 69 Hz attempt (RAM) | fell back to stock (`bootreason=lk_crash`); boot partition unchanged |
+| 69 Hz image test | **bootloop** — user rolled back; `boot` is back to `b5c65e59…` |
+| Stock-timing control | **building**: run `44932757133` (`variant=stock`, no vfp/PLL change) |
 | Diagnostic marker images | published in release **`ramboot-diag-v1`** |
-| Flashed permanently | not yet |
+| Flashed permanently | no — rolled back |
 
-The boot partition is untouched (`sha256 b5c65e59…`). The phone runs stock
-`4.14.235-M.A.P` (`#34`, clang 9.0.3, 2021-06-21) at 60 Hz.
+The boot partition is restored to the backup (`sha256 b5c65e59…`). The phone runs stock
+`4.14.235-M.A.P` (`#34`, clang 9.0.3, 2021-06-21) at 60 Hz. The 69 Hz kernel bootlooped
+before Android and left no pstore log.
 
 ## Timeline
 
@@ -79,6 +82,15 @@ The boot partition is untouched (`sha256 b5c65e59…`). The phone runs stock
     stock-kernel image with `ramtest=stock_marker` in the cmdline to settle it: if the
     marker shows up in `/proc/cmdline`, the upload is honored; if not, `fastboot boot` is
     a no-op on this LK and only a real flash can test the kernel.
+14. **69 Hz image tested — bootloop; rollback clean.** The 69 Hz kernel was installed/booted and
+    bootlooped before Android. The user restored the backup; the live kernel is stock `#34`,
+    and `boot` hashes to `b5c65e59…`, so the rollback is verified. The failed boot left no
+    kernel log in pstore (`console-ramoops` still ends with the previous clean `reboot
+    bootloader`), which suggests a hang/panic before pstore or console init — consistent with
+    display init hanging on the new panel timing, but not yet proven. A **stock-timing
+    control** (`variant=stock`, same clang 18 pipeline, vfp/PLL untouched) is queued as run
+    `44932757133`: if it boots, the timing change is the cause; if it also bootloops, the
+    build/toolchain is.
 
 Check it with:
 
@@ -99,17 +111,20 @@ gh run view <id> --repo deviknitkkr/rmx1821-kernel-ci --log-failed
 - after the failed 69 Hz attempt the `boot` partition still hashes to `b5c65e59…`
 - the fallback boot reported `androidboot.bootreason=lk_crash`; live kernel stayed stock
   (`#34`, clang 9.0.3, 2021) and `CONFIG_COMPAT_VDSO=y`
+- the 69 Hz image **bootlooped**; rollback restored the exact backup (`b5c65e59…`)
+- the bootloop left no pstore kernel log
 
 **Assumed, not yet observed**
 
 - that `fastboot boot` on this LK actually loads the uploaded image (the backup test was
   inconclusive — same bytes as the partition; the `stock_marker` image settles it)
+- that the bootloop is caused by the panel timing — the **stock-timing control** (run
+  `44932757133`) separates timing from the clang-18 build/toolchain
 
 - that commit `68d7a37a…` is the *exact* source of the running kernel — inferred from
   `SUBLEVEL = 235`, the `-M.A.P` localversion and the 2021-06-21 build timestamp. The
   `.config` diff against `/proc/config.gz` is the confirming check.
-- that cutting `vfp` to 16 is accepted by the ILI9881 controller
-- that 69–72 Hz is stable (no flicker, no dropped lines)
+- that a conservative vfp (200, 100, 60, 36) is accepted by the ILI9881 controller
 - that MTK HWC reports the new rate to SurfaceFlinger
 - that the rebuild produces a bootable image with identical vermagic
 - that vendor kernel modules (Wi-Fi, touch, camera, GPU) still load — they should, since
@@ -118,13 +133,20 @@ gh run view <id> --repo deviknitkkr/rmx1821-kernel-ci --log-failed
 
 ## Open questions and how to resolve them
 
-### 1. Does the panel lock at 69/72?
+### 1. Is the bootloop caused by the panel timing?
 
-Observe: no flicker/rolling bands, no black screen, logo renders, home screen stable.
+The 69 Hz image bootlooped; the rollback is clean. First test the **stock-timing control**
+(run `44932757133`, `variant=stock`): same clang 18 pipeline, `vfp`/PLL untouched.
 
-If it fails: restore boot, then try conservative steps in between —
-`vfp = 60` (~66.6 Hz), `vfp = 36` (~67.6 Hz) — to find the edge. If even `vfp = 200`
-works but 16 does not, the limit is near 60 and the project ends there (restore stock).
+- **Control boots** → the timing change is the cause. Step conservatively:
+  `vfp = 200` (~61.2 Hz), `100` (~64.9), `60` (~66.6), `36` (~67.6), `16` (~68.5). Find
+  the highest value that boots, then back off one step.
+- **Control also bootloops** → the build/toolchain is the cause (config drift, clang 18,
+  image format). Fix that before any more timing tests: diff the artifact `.config` against
+  `/proc/config.gz`, check the kernel image/boot header, and consider the 2021 clang or the
+  Android toolchain.
+
+Do not assume the panel is at fault until the control boots.
 
 ### 2. Does Android see the new rate?
 
@@ -152,29 +174,23 @@ Empty → fine. If not, the build drifted from the defconfig; rebuild with
 
 ## Next concrete steps
 
-1. On the **Pixel**, confirm the downloaded file is the 69 Hz image:
-   `ls -l boot-69hz-magisk.img` = 33,554,432 bytes, sha256 `7c5975d4…4d568bd`. Capture
-   the full `fastboot boot` output (`Sending… / Booting… / OKAY` or `FAILED`).
-2. **Marker test** (zero risk, stock kernel). Download `boot-ramtest-marker.img`
-   (sha256 `026cb9a6…3ca55e`) and `boot-69hz-tagged.img` (sha256 `4e6871ce…d9a360`)
-   from release `ramboot-diag-v1`, `fastboot boot` the marker image, then:
-
-   ```bash
-   cat /proc/cmdline | tr ' ' '\n' | grep ramtest
-   # expect: ramtest=stock_marker
-   ```
-
-   - **Marker present** → this LK honors uploaded images. Reboot, then boot
-     `boot-69hz-tagged.img` and check `uname -v` (expect `#1 … Sat Nov 21 16:27:40 UTC
-     2026`, clang 18) and `ramtest=69hz_marker`.
-   - **Marker absent** → `fastboot boot` ignores the image on this LK. Then the only way
-     to test the kernel is a real flash (`fastboot flash boot`), with `backup-v1` as the
-     rollback (the Pixel can flash it even if Android doesn't boot).
-3. If the 69 Hz kernel boots: check overlay, `dumpsys display`, `dumpsys SurfaceFlinger`,
-   Wi-Fi, and `dmesg` module errors.
-4. If it falls back/reboots: capture the fastboot output and `bootreason`; next try
-   `vfp = 60` (~66.6 Hz) to find the panel's edge.
-5. Only after 69 is confirmed, build/test 72 (`variant=72`).
+1. **Finish the stock-timing control** (run `44932757133`). Download `Image-stockhz` (kernel,
+   `.config`, `report.txt`) and `boot-stockhz-magisk` (repacked boot). The `.config` is the
+   first chance to diff against the phone's `/proc/config.gz`.
+2. Record the test details the user has not yet given: was the 69 Hz image **flashed** or
+   **`fastboot boot`ed**, which file, what the bootloop looked like, and whether the
+   `stock_marker` image ever showed `ramtest=stock_marker`.
+3. Test the stock control (prefer `fastboot boot` if the marker proved it; otherwise flash
+   and keep `backup-v1` ready):
+   - **Boots** → timing is the cause. Build conservative variants (`vfp = 200`, then `100`,
+     `60`, `36`) and test each. The workflow currently has `stock`/`69`/`72`; add a `vfp`
+     input or more variants for this.
+   - **Bootloops** → build/toolchain is the cause. Compare `.config` with `/proc/config.gz`,
+     confirm the boot image header/format, and try the older clang or Android toolchain.
+4. Only after a conservative timing boots, step toward `vfp = 16` (~68.5 Hz). Do not attempt
+   `72` until `68.5` is stable.
+5. If `fastboot boot` is still unverified, the `stock_marker` test is still the zero-risk way
+   to settle it; otherwise every kernel test is a flash + rollback cycle.
 
 ## Pre-flash testing (what is and isn't possible)
 

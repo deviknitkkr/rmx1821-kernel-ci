@@ -1,8 +1,9 @@
 # RMX1821 panel refresh project — handoff
 
-**Status (2026-11-21): the 69 Hz kernel is built and published. The first RAM-boot attempt
-fell back to the stock kernel; the `boot` partition is untouched. Next action: the marker
-test in [flash-and-recovery.md](flash-and-recovery.md#step-0-prove-fastboot-boot-loads-the-uploaded-image).**
+**Status (2026-11-21): the 69 Hz kernel was tested and **bootlooped**; the user rolled back
+and the phone is back on the stock kernel. The failed boot left no pstore log. A
+**stock-timing control** (same clang 18 pipeline, vfp/PLL untouched) is building to separate
+panel timing from the toolchain. See [status.md](status.md) for the live state.**
 
 This folder exists so that another person (or an AI assistant) can pick this up cold —
 including on a completely different device — and either continue the work or recover the
@@ -12,25 +13,29 @@ phone if a flash goes wrong.
 
 | Item | Value |
 |---|---|
-| Phone's `boot` partition | Magisk-patched image, sha256 `b5c65e59…b800c` — **untouched** |
+| Phone's `boot` partition | restored to the Magisk-patched backup, sha256 `b5c65e59…b800c` — **clean rollback** |
 | Kernel actually running | stock `4.14.235-M.A.P #34`, clang 9.0.3, 2021-06-21, **60 Hz** |
 | 69 Hz image | release **`boot-69hz-v1`**, `boot-69hz-magisk.img`, sha256 `7c5975d4…4d568bd` |
+| 69 Hz test | **bootloop** before Android; user rolled back successfully |
+| Stock-timing control | **building**: run `44932757133` (`variant=stock`, no vfp/PLL change) |
 | Diagnostic images | release **`ramboot-diag-v1`**: stock marker `026cb9a6…3ca55e`, 69 Hz tagged `4e6871ce…d9a360` |
-| RAM boot | **unproven** — first attempt reset with `bootreason=lk_crash` and fell back to stock |
-| Flashed permanently | **no** |
+| `fastboot boot` honors the upload | **unproven** — the first attempt reset with `bootreason=lk_crash` |
+| Flashed permanently | **no** — rolled back |
 
-The first 69 Hz attempt booted the stock kernel. Evidence captured on the phone:
+The 69 Hz image did execute, and it bootlooped before Android. The rollback restored the
+exact backup: live `uname -v` = `#34 … clang 9.0.3 … Mon Jun 21 2021`, `boot` hash
+`b5c65e59…`. The failed boot left no kernel log in pstore (`console-ramoops` still ends
+with the previous clean `reboot bootloader`), suggesting a hang before pstore/console init.
+That is consistent with display init hanging on the new panel timing, but not proven. The
+stock-timing control decides it.
 
-- live `uname -v` = `#34 … clang 9.0.3 … Mon Jun 21 23:07:26 IST 2021`
-- our image's banner = `#1 … clang 18.1.3 … Sat Nov 21 16:27:40 UTC 2026`
-- live `CONFIG_COMPAT_VDSO=y`; our build has it **off**
-- `boot` still hashes to `b5c65e59…`, so nothing was written
-- `/proc/cmdline` says `androidboot.bootreason=lk_crash`
+The earlier `fastboot boot` attempt fell back to stock with `lk_crash`, so whether this LK
+honors uploaded images is still unproven.
 
-So the 69 Hz kernel was never executed. Either the wrong file was booted, or this LK
-ignored/crashed on the uploaded image. The marker image distinguishes those two cases.
+### Marker test (optional: settles `fastboot boot`)
 
-### Marker test (do this before any flash)
+The 69 Hz test already bootlooped, so the immediate question is the control build. This
+marker test is still worth doing to know whether future tests can avoid flashing.
 
 Download on the **Pixel** (public, no auth):
 
@@ -126,21 +131,22 @@ anything other than `4.14.235-M.A.P`.
 ## If you are an AI assistant taking over
 
 1. Read [`status.md`](status.md) first — it has the live state, evidence, and the latest
-   timeline entry. Do **not** assume the flash has happened; it has not.
-2. The phone is currently stock (60 Hz) and its `boot` partition is untouched. The 69 Hz
-   image is built but was not actually executed. Do not flash yet.
-3. Run the **marker test** above. It is zero-risk and answers the only open question that
-   matters right now: does this LK load an uploaded image?
-4. If the marker appears, boot `boot-69hz-tagged.img` and verify `uname -v` (2026, clang 18)
-   and `ramtest=69hz_marker`. If the 69 Hz kernel boots, check the overlay, `dumpsys
-   display`, `dumpsys SurfaceFlinger`, Wi-Fi, and module errors.
-5. If the marker does **not** appear, `fastboot boot` is a no-op on this LK. Only a real
-   flash tests the kernel. The rollback is `fastboot flash boot
-   boot_current_magisk_RMX1821.img` from `backup-v1`; the Pixel can do this even if Android
-   won't boot. Keep the Pixel and cable available.
-6. Never flash any partition other than `boot` (or `dtbo` if and only if the device tree
+   timeline entry.
+2. The phone is back on stock (60 Hz) and its `boot` partition is the exact backup. The
+   69 Hz image **bootlooped**, so do not re-flash it blindly. The user rolled back once;
+   keep `backup-v1` and the Pixel/laptop available for every future test.
+3. Immediate next action: finish and test the **stock-timing control** (run `44932757133`).
+   If it boots, the timing change caused the bootloop; if it also bootloops, the clang-18
+   build/toolchain is the cause. Do not skip this control.
+4. If the control boots, build conservative `vfp` variants (200 → 100 → 60 → 36) and step
+   down until the panel refuses, then back off one step. Do not jump back to `vfp = 16`.
+5. The **marker test** above is optional but zero-risk and settles whether `fastboot boot`
+   works on this LK. If it does not, every test is a flash + rollback cycle.
+6. Rollback is `fastboot flash boot boot_current_magisk_RMX1821.img` from `backup-v1`; the
+   Pixel can do this even if Android won't boot. Keep the Pixel and cable available.
+7. Never flash any partition other than `boot` (or `dtbo` if and only if the device tree
    changed). See `flash-and-recovery.md` for the full recovery procedure.
-7. Do not ask the user to re-run Magisk's "patch a file" on `Image.gz`; that is a bare
+8. Do not ask the user to re-run Magisk's "patch a file" on `Image.gz`; that is a bare
    kernel, not a boot image.
 
 ---

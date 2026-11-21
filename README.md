@@ -1,19 +1,21 @@
 # RMX1821 kernel — raised panel refresh
 
-> **Current state (2026-11-21):** the 69 Hz kernel is built and published, but the first
-> `fastboot boot` attempt fell back to the stock kernel. The `boot` partition is untouched.
-> Start with [`docs/README.md`](docs/README.md#current-state--read-this-first) and run the
-> marker test before flashing.
+> **Current state (2026-11-21):** the 69 Hz image was tested and **bootlooped**; the user
+> rolled back and the phone is back on the stock kernel. A **stock-timing control** (same
+> clang 18 build, no vfp/PLL change) is building. Start with
+> [`docs/status.md`](docs/status.md); do not re-flash the 69 Hz image blindly.
 
 Builds `Image.gz` for the Realme 3 (`RMX1821`, MT6771, ILI9881 INX HD+ panel) with the
 panel's vertical front porch reduced, optionally with a 4.4% DSI PLL bump.
 
 | variant | vfp | PLL | expected refresh |
 |---|---|---|---|
-| `69` | 236 -> 16 | 360 (unchanged) | ~69.2 Hz |
-| `72` | 236 -> 16 | 360 -> 376 | ~72.3 Hz |
+| `69` | 236 -> 16 | 360 (unchanged) | ~68.5 Hz |
+| `72` | 236 -> 16 | 360 -> 376 | ~71.5 Hz |
+| `stock` | 236 | 360 | 59.94 Hz (control) |
 
-`69` does not change the DSI link rate at all — it only removes frame blanking.
+The names are approximate. With `vsa`+`vbp` = 12 lines, vfp 16 gives `vtotal = 1548`, so
+blanking alone tops out at ~68.5 Hz (vfp 0 would be ~69.2 Hz).
 
 ## Full documentation
 
@@ -39,47 +41,40 @@ Start there if this device is lost, unbootable, or you are picking the project u
 - Only `vertical_frontporch` (and optionally `PLL_CLOCK`) change; no headers, no exported
   symbols, no module rebuilds.
 
-## Testing the 69 Hz image (no build needed)
+## Testing a kernel build
 
-Prebuilt: release **`boot-69hz-v1`** —
-`boot-69hz-magisk.img`, sha256 `7c5975d481c4d1299367e254809afba2301c8d7adb8dec0e8e66b4ecf4d568bd`.
+The 69 Hz image **bootlooped**; do not re-flash it. Current test order:
 
-1. **Prove RAM boot first.** Download `boot-ramtest-marker.img` from release
-   `ramboot-diag-v1` on the host (Pixel/laptop), then:
+1. **Stock-timing control** (run `44932757133`, `variant=stock`): confirm the repacked image
+   boots at 59.94 Hz. If it bootloops too, the clang-18 build/toolchain is the problem; if it
+   boots, the timing change is.
+2. If the control boots, build conservative variants (`vfp = 200`, `100`, `60`, `36`) and
+   step down. Do not jump back to `vfp = 16`.
 
-   ```bash
-   fastboot boot boot-ramtest-marker.img
-   cat /proc/cmdline | tr ' ' '\n' | grep ramtest
-   ```
+Use RAM boot when possible — it writes nothing:
 
-   `ramtest=stock_marker` means the upload is honored. **No output** means this LK ignores
-   uploaded images; only a real flash can test the kernel.
+```bash
+fastboot boot boot-ramtest-marker.img   # stock kernel + cmdline marker, safe
+cat /proc/cmdline | tr ' ' '\n' | grep ramtest   # ramtest=stock_marker means it works
+```
 
-2. If the marker appears, reboot and boot the tagged 69 Hz image:
+If `fastboot boot` is unproven on this LK, every test is a flash + rollback cycle. The
+rollback is `fastboot flash boot boot_current_magisk_RMX1821.img` from the Pixel or a laptop.
 
-   ```bash
-   fastboot boot boot-69hz-tagged.img
-   uname -v        # expect: #1 ... Sat Nov 21 2026   (clang 18)
-   cat /proc/cmdline | tr ' ' '\n' | grep ramtest   # expect: ramtest=69hz_marker
-   ```
-
-3. Only after RAM boot is proven, flash. Full verification and the `dd` command are in
-   [`docs/flash-and-recovery.md`](docs/flash-and-recovery.md). Keep the Pixel and
-   `boot_current_magisk_RMX1821.img` ready for rollback.
+Full verification and recovery detail: [`docs/flash-and-recovery.md`](docs/flash-and-recovery.md).
 
 ## Rebuilding from source
 
 Trigger CI, then download the kernel artifact:
 
 ```bash
-gh workflow run build.yml --repo deviknitkkr/rmx1821-kernel-ci -f variant=69
+gh workflow run build.yml --repo deviknitkkr/rmx1821-kernel-ci -f variant=stock
 gh run list --repo deviknitkkr/rmx1821-kernel-ci --workflow build.yml --limit 3
-gh run download <run-id> --repo deviknitkkr/rmx1821-kernel-ci -n Image-69hz -D ~/kernel-out
+gh run download <run-id> --repo deviknitkkr/rmx1821-kernel-ci -n Image-stockhz -D ~/kernel-out
 ```
 
-The same run also has a `boot-69hz-magisk` artifact with a directly flashable `boot.img`
-(the CI repack job). Validate it, then use the RAM-boot test above before flashing. Full
-detail in [`docs/flash-and-recovery.md`](docs/flash-and-recovery.md).
+The same run also has a `boot-stockhz-magisk` artifact with a directly flashable `boot.img`
+(the CI repack job). Validate it, then use the RAM-boot test above before flashing.
 
 Recovery, if it does not boot:
 

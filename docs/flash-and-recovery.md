@@ -1,10 +1,10 @@
 # Flash and recovery
 
-**Nothing has been flashed to the phone.** A 69 Hz boot image exists, but the first
-`fastboot boot` attempt fell back to the stock kernel (`bootreason=lk_crash`; the boot
-partition still hashes to `b5c65e59…`). **RAM boot is not yet proven on this LK** — the
-backup test was inconclusive because the backup is byte-identical to the boot partition.
-Run the marker test below before trusting a RAM boot.
+**The 69 Hz image has been tested and bootlooped; the user rolled back.** The phone is back
+on the stock kernel, and `boot` hashes to `b5c65e59…` (the backup). A **stock-timing
+control** (run `44932757133`, no vfp/PLL change) is building to separate the panel timing
+from the clang-18 toolchain. The marker test below is still the zero-risk way to learn
+whether `fastboot boot` works on this LK.
 
 ## Step 0: prove `fastboot boot` loads the uploaded image
 
@@ -29,6 +29,9 @@ This image has the **stock kernel** (sha `98e4a881…`), so it is risk-free. If 
 `uname -v` will still show 2021 — that is expected; the marker is the test.
 
 ## Test first: RAM boot (writes nothing)
+
+> **Do not boot the 69 Hz image again** — it bootlooped. Use this procedure for the
+> stock-timing control or a conservative variant once it is built.
 
 Use the **tagged** 69 Hz image so the boot itself proves which kernel ran:
 
@@ -241,6 +244,7 @@ fastboot is unreachable and the device is truly dead.
 
 | Symptom | Meaning | Action |
 |---|---|---|
+| Bootloop after installing the 69 Hz image | kernel/panel hang before Android; rollback works | restore boot (done); test the stock-timing control, then conservative vfp |
 | `fastboot boot` prints OKAY but the stock kernel is running after reboot | LK ignored/crashed on the uploaded image (`bootreason=lk_crash`); nothing was written | run the marker test; if no marker, only a real flash can test the kernel |
 | Black screen / no backlight after logo | panel rejected the new timing | restore boot |
 | Boot logo, then reboot loop | kernel panic | restore boot |

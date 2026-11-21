@@ -127,9 +127,17 @@ Because `fps ∝ PLL_CLOCK / (htotal · vtotal)`:
 | vertical_frontporch | vtotal | PLL_CLOCK | expected refresh |
 |---|---|---|---|
 | 236 (stock) | 1768 | 360 | 59.94 Hz |
+| 200 | 1732 | 360 | ~61.2 Hz |
+| 100 | 1632 | 360 | ~64.9 Hz |
+| 60 | 1592 | 360 | ~66.6 Hz |
 | 36 | 1568 | 360 | ~67.6 Hz |
-| **16** | **1532** | **360** | **~69.2 Hz** |
-| 16 | 1532 | 376 | ~72.3 Hz |
+| **16** | **1548** | **360** | **~68.5 Hz** |
+| 0 (max blanking) | 1532 | 360 | ~69.2 Hz |
+| 16 | 1548 | 376 | ~71.5 Hz |
+
+The CI labels are approximate: variant `69` uses vfp 16 and is actually **~68.5 Hz**;
+variant `72` is **~71.5 Hz**. The theoretical blanking-only maximum (vfp 0) is ~69.2 Hz.
+The `vtotal` includes `vsa = 4` and `vbp = 8`, so vfp 16 gives 1548, not 1532.
 
 Blank**ing alone cannot reach 72**: total blanking is only 248 lines, and 1768/1.2 = 1473,
 which is below the 1520 active lines. So 72 Hz requires the PLL bump as well.
