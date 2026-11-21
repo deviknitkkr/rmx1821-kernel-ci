@@ -18,11 +18,13 @@ Last updated: 2026-11-21.
 | Kernel built at **4.14.235** | yes — run `44923932703`, release `4.14.235-M.A.P` |
 | Boot image repacked | yes — `boot-69hz-magisk.img`, 32 MiB, sha256 `7c5975d4…4d568bd` |
 | Published for testing | release **`boot-69hz-v1`** (public) |
-| `fastboot boot` supported on this unit | **yes** — confirmed with the backup image |
-| RAM-boot test of 69 Hz | pending |
+| `fastboot boot` actually loads the image | **unverified** — the backup test couldn't prove it (byte-identical to the boot partition); marker test pending |
+| RAM-boot attempt of 69 Hz | fell back to stock (`bootreason=lk_crash`); boot partition unchanged |
+| Diagnostic marker images | published in release **`ramboot-diag-v1`** |
 | Flashed permanently | not yet |
 
-Nothing on the device has changed. The phone still runs `4.14.235-M.A.P` at 60 Hz.
+The boot partition is untouched (`sha256 b5c65e59…`). The phone runs stock
+`4.14.235-M.A.P` (`#34`, clang 9.0.3, 2021-06-21) at 60 Hz.
 
 ## Timeline
 
@@ -65,9 +67,18 @@ Nothing on the device has changed. The phone still runs `4.14.235-M.A.P` at 60 H
     10,322,730 → 10,976,604 bytes; ramdisk **byte-identical** (`44bb37db…d855`),
     `.backup`/`overlay.d` intact; image exactly 32 MiB. Raw kernel sha256 `4d20949e…7f4071`.
     Published as release **`boot-69hz-v1`**, sha256 `7c5975d4…4d568bd`.
-12. **`fastboot boot` confirmed working on this unit** — the backup image was RAM-booted via
-    the Pixel. This is now the primary test path: nothing is written, a normal reboot
-    returns to the current kernel.
+12. **`fastboot boot` believed working** — the backup image appeared to RAM-boot via the Pixel.
+    Caveat: the backup is byte-identical to the `boot` partition, so that test could not
+    distinguish a real RAM boot from a normal boot. Entry 13 resolves it.
+13. **First 69 Hz RAM-boot attempt did not take.** Overlay still read 60. Verification:
+    live `uname -v` = `#34 … clang 9.0.3 … Mon Jun 21 23:07:26 IST 2021`; live
+    `CONFIG_COMPAT_VDSO=y` (our build has it off); boot partition sha256 still
+    `b5c65e59…` (nothing written); cmdline says `androidboot.bootreason=lk_crash`; uptime
+    had reset. So the running kernel was stock. Either the wrong file was booted or this
+    LK rejected/ignored the uploaded image. Release **`ramboot-diag-v1`** adds a
+    stock-kernel image with `ramtest=stock_marker` in the cmdline to settle it: if the
+    marker shows up in `/proc/cmdline`, the upload is honored; if not, `fastboot boot` is
+    a no-op on this LK and only a real flash can test the kernel.
 
 Check it with:
 
@@ -85,8 +96,14 @@ gh run view <id> --repo deviknitkkr/rmx1821-kernel-ci --log-failed
 - boot = 32 MiB, dtbo = 16 MiB, A-only layout
 - SHA-256 of both backups
 - kernel release string of the running kernel is exactly `4.14.235-M.A.P`
+- after the failed 69 Hz attempt the `boot` partition still hashes to `b5c65e59…`
+- the fallback boot reported `androidboot.bootreason=lk_crash`; live kernel stayed stock
+  (`#34`, clang 9.0.3, 2021) and `CONFIG_COMPAT_VDSO=y`
 
 **Assumed, not yet observed**
+
+- that `fastboot boot` on this LK actually loads the uploaded image (the backup test was
+  inconclusive — same bytes as the partition; the `stock_marker` image settles it)
 
 - that commit `68d7a37a…` is the *exact* source of the running kernel — inferred from
   `SUBLEVEL = 235`, the `-M.A.P` localversion and the 2021-06-21 build timestamp. The
@@ -135,26 +152,36 @@ Empty → fine. If not, the build drifted from the defconfig; rebuild with
 
 ## Next concrete steps
 
-1. Download on the **Pixel**: `boot-69hz-magisk.img` from release `boot-69hz-v1`
-   (`…/releases/download/boot-69hz-v1/boot-69hz-magisk.img`, sha256 `7c5975d4…`).
-2. Reboot the phone to bootloader (`su -c 'reboot bootloader'`) and run
-   `fastboot boot boot-69hz-magisk.img`. Nothing is written.
-3. Check: boot logo, lock screen, then
-   - Developer options → Show refresh rate (expect ~69)
-   - `dumpsys display | grep supportedModes`
-   - `dumpsys SurfaceFlinger | grep -E "VSYNC period|primary range"`
-   - Wi-Fi on (proves vendor modules loaded)
-   - `su -c 'dmesg | grep -iE "disagrees about version|unknown symbol"'`
-4. A normal reboot returns to the untouched `boot` partition. Report the result and it goes
-   in this file.
-5. If 69 is good, build/test 72 (`variant=72`); if the overlay still says 60, stop and
-   inspect the HWC reporting path before any permanent flash.
+1. On the **Pixel**, confirm the downloaded file is the 69 Hz image:
+   `ls -l boot-69hz-magisk.img` = 33,554,432 bytes, sha256 `7c5975d4…4d568bd`. Capture
+   the full `fastboot boot` output (`Sending… / Booting… / OKAY` or `FAILED`).
+2. **Marker test** (zero risk, stock kernel). Download `boot-ramtest-marker.img`
+   (sha256 `026cb9a6…3ca55e`) and `boot-69hz-tagged.img` (sha256 `4e6871ce…d9a360`)
+   from release `ramboot-diag-v1`, `fastboot boot` the marker image, then:
+
+   ```bash
+   cat /proc/cmdline | tr ' ' '\n' | grep ramtest
+   # expect: ramtest=stock_marker
+   ```
+
+   - **Marker present** → this LK honors uploaded images. Reboot, then boot
+     `boot-69hz-tagged.img` and check `uname -v` (expect `#1 … Sat Nov 21 16:27:40 UTC
+     2026`, clang 18) and `ramtest=69hz_marker`.
+   - **Marker absent** → `fastboot boot` ignores the image on this LK. Then the only way
+     to test the kernel is a real flash (`fastboot flash boot`), with `backup-v1` as the
+     rollback (the Pixel can flash it even if Android doesn't boot).
+3. If the 69 Hz kernel boots: check overlay, `dumpsys display`, `dumpsys SurfaceFlinger`,
+   Wi-Fi, and `dmesg` module errors.
+4. If it falls back/reboots: capture the fastboot output and `bootreason`; next try
+   `vfp = 60` (~66.6 Hz) to find the panel's edge.
+5. Only after 69 is confirmed, build/test 72 (`variant=72`).
 
 ## Pre-flash testing (what is and isn't possible)
 
 - **`fastboot boot <image>`** — loads into RAM, writes nothing. Best test: covers panel lock,
-  HWC reporting, and module loading. Support varies by Realme LK build; try with the current
-  image first.
+  HWC reporting, and module loading. **Not yet proven on this LK**: the backup test was
+  inconclusive because the backup equals the boot partition. The `stock_marker` image
+  (release `ramboot-diag-v1`) is the definitive check.
 - **Config diff** — running `/proc/config.gz` (5075 lines) vs artifact `.config`.
 - **Module CRC check** — `report.txt` lists every `__crc_*` in `vmlinux`; compare against the
   `__versions` section of `/vendor/lib/modules/*.ko` (`wlan_drv_gen3.ko`, `fpsgo.ko`,

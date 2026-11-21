@@ -1,8 +1,27 @@
 # Flash and recovery
 
-**Nothing has been flashed to the phone.** A 69 Hz boot image exists and `fastboot boot` is
-confirmed working on this unit (the backup image was RAM-booted via the Pixel). Test with
-`fastboot boot` first; only flash once it is proven.
+**Nothing has been flashed to the phone.** A 69 Hz boot image exists, but the first
+`fastboot boot` attempt fell back to the stock kernel (`bootreason=lk_crash`; the boot
+partition still hashes to `b5c65e59…`). **RAM boot is not yet proven on this LK** — the
+backup test was inconclusive because the backup is byte-identical to the boot partition.
+Run the marker test below before trusting a RAM boot.
+
+## Step 0: prove `fastboot boot` loads the uploaded image
+
+Download `boot-ramtest-marker.img` from release `ramboot-diag-v1` on the host, then:
+
+```bash
+fastboot boot boot-ramtest-marker.img
+# after Android is up:
+cat /proc/cmdline | tr ' ' '\n' | grep ramtest
+```
+
+- `ramtest=stock_marker` → the upload is honored. Continue below.
+- no output → LK ignores uploaded images; only a real flash can test the kernel
+  (`fastboot flash boot`, with `backup-v1` as the rollback).
+
+This image has the **stock kernel** (sha `98e4a881…`), so it is risk-free. If it boots,
+`uname -v` will still show 2021 — that is expected; the marker is the test.
 
 ## Test first: RAM boot (writes nothing)
 
