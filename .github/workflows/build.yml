@@ -51,6 +51,15 @@ jobs:
         env:
           VARIANT: ${{ inputs.variant }}
         run: |
+          # Build strictness only. MTK adds `subdir-ccflags-y += -Werror` in many
+          # directories (after KCFLAGS, so -Wno-error=... cannot override it) and
+          # the top Makefile forces -Werror=strict-prototypes etc. clang 12 did
+          # not flag those; clang 18+ does. Demote every -Werror to -Wno-error.
+          # This changes no generated code, no ABI, no vermagic.
+          grep -rl --include='Makefile' --include='Kbuild' --include='*.mk' -- '-Werror' . \
+            | xargs -r sed -i 's/-Werror/-Wno-error/g'
+          echo "remaining -Werror occurrences: $(grep -rl --include='Makefile' --include='Kbuild' --include='*.mk' -- '-Werror' . | wc -l)"
+
           # The compat vDSO needs a 32-bit ARM toolchain we don't ship. It is a
           # leaf feature: disabling it changes no ABI, no exported symbol and no
           # vermagic. 32-bit apps still run via CONFIG_COMPAT.
