@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       variant:
-        description: "69 = vfp only (no PLL change), 72 = vfp + PLL 376"
+        description: "69 = vfp 16, 72 = vfp 16 + PLL 376, stock = no timing change (control)"
         type: choice
-        options: ["69", "72"]
+        options: ["69", "72", "stock"]
         default: "69"
 
 permissions:
@@ -107,9 +107,13 @@ jobs:
             arch/arm64/configs/RMX1821_defconfig
 
           F=drivers/misc/mediatek/lcm/ili9881_hd_dsi_vdo_qc_inx_zal1810/ili9881_hd_dsi_vdo_qc_inx_zal1810.c
-          sed -i 's/params->dsi.vertical_frontporch = 236;/params->dsi.vertical_frontporch = 16;/' "$F"
-          if [ "$VARIANT" = "72" ]; then
-            sed -i 's/params->dsi.PLL_CLOCK = 360;/params->dsi.PLL_CLOCK = 376;/' "$F"
+          if [ "$VARIANT" = "stock" ]; then
+            echo "stock control: leaving vertical_frontporch / PLL_CLOCK untouched"
+          else
+            sed -i 's/params->dsi.vertical_frontporch = 236;/params->dsi.vertical_frontporch = 16;/' "$F"
+            if [ "$VARIANT" = "72" ]; then
+              sed -i 's/params->dsi.PLL_CLOCK = 360;/params->dsi.PLL_CLOCK = 376;/' "$F"
+            fi
           fi
 
           echo "=== effective panel values ==="
