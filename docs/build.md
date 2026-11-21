@@ -6,7 +6,8 @@ The phone (Helio P60, 3 GB) takes 1.5–2.5 h and bakes itself at 70–85 °C. T
 (Tensor G3, 8 GB) takes 30–45 min. A GitHub Actions arm64 runner takes ~20–30 min with no
 local heat, and the artifact is a plain file that gets repacked on the phone.
 
-The workflow only produces `Image.gz`. It never touches a device.
+The build job produces `Image.gz`; a second job repacks it into a flashable boot image.
+Neither job touches a device.
 
 ## Trigger a build
 
@@ -18,7 +19,8 @@ gh run watch <run-id> --repo deviknitkkr/rmx1821-kernel-ci
 
 `variant` is `69` (front porch only) or `72` (front porch + PLL 376).
 
-Artifact name: `Image-69hz` / `Image-72hz`, containing `Image.gz`.
+Artifacts: `Image-69hz` / `Image-72hz` (kernel, `.config`, `report.txt`) and
+`boot-69hz-magisk` / `boot-72hz-magisk` (a directly flashable `boot.img` + `SHA256SUMS`).
 
 ```bash
 gh run download <run-id> --repo deviknitkkr/rmx1821-kernel-ci -n Image-69hz -D ~/kernel-out
@@ -212,9 +214,12 @@ Identical to the CI steps. On a native aarch64 host:
 
 ```bash
 pkg install -y clang lld make git bc bison flex python dtc
-git clone --depth=1 -b M.A.P \
-  https://github.com/Maanush2004/android_kernel_realme_RMX1821 ~/kernel
+git clone https://github.com/Maanush2004/android_kernel_realme_RMX1821 ~/kernel
 cd ~/kernel
+git checkout 68d7a37a267743f12ac7d85054fea74564b8f7ea   # sublevel 235, 2021-06-21
+
+# The workflow's full KCFLAGS demotion list lives in .github/workflows/build.yml;
+# copy it if the local build hits new -Werror categories.
 
 grep -rl --include='Makefile' --include='Kbuild' --include='*.mk' -- '-Werror' . \
   | xargs -r sed -i 's/-Werror/-Wno-error/g'
