@@ -113,6 +113,27 @@ grep -rl --include='Makefile' --include='Kbuild' --include='*.mk' -- '-Werror' .
 
 This changes build strictness only. No generated code, no ABI, no vermagic.
 
+### 4. Prebuilt x86-64 `dtc_overlay`
+
+`scripts/Makefile.lib` normally calls `$(srctree)/scripts/dtc/dtc_overlay`, a **binary
+committed to the repo and built for x86-64**. On the arm64 runner it fails at the very end
+of the build:
+
+```
+/bin/sh: 1: ../scripts/dtc/dtc_overlay: Exec format error
+make[2]: *** [scripts/Makefile.lib:321: arch/arm64/boot/dts/mediatek/mt6771.dtb] Error 126
+```
+
+kbuild already compiles its own `dtc` for the host architecture (`HOSTCC
+scripts/dtc/dtc.o` appears early in the log) and it takes the same flags
+(`-@ -O dtb -b 0`). Redirect the rule:
+
+```bash
+sed -i 's#$(srctree)/scripts/dtc/dtc_overlay#$(objtree)/scripts/dtc/dtc#' scripts/Makefile.lib
+```
+
+`objtree` is the `O=out` directory, so this resolves to `out/scripts/dtc/dtc`.
+
 ### Harmless warning
 
 `Node.js 20 is deprecated ... actions/checkout@v4` — cosmetic, ignore.

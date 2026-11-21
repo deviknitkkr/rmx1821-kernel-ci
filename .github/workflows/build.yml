@@ -60,6 +60,17 @@ jobs:
             | xargs -r sed -i 's/-Werror/-Wno-error/g'
           echo "remaining -Werror occurrences: $(grep -rl --include='Makefile' --include='Kbuild' --include='*.mk' -- '-Werror' . | wc -l)"
 
+          # MTK checks in a prebuilt x86-64 scripts/dtc/dtc_overlay. On an arm64
+          # runner that is "Exec format error". kbuild already builds its own
+          # dtc for the host arch (HOSTCC scripts/dtc/dtc.o) and it accepts the
+          # same -@ -O dtb -b 0 flags, so point cmd_dtc at that instead.
+          sed -i 's#$(srctree)/scripts/dtc/dtc_overlay#$(objtree)/scripts/dtc/dtc#' \
+            scripts/Makefile.lib
+          grep -n "cmd_dtc =" -A2 scripts/Makefile.lib
+          if grep -q "dtc_overlay" scripts/Makefile.lib; then
+            echo "dtc_overlay is still referenced by Makefile.lib"; exit 1
+          fi
+
           # The compat vDSO needs a 32-bit ARM toolchain we don't ship. It is a
           # leaf feature: disabling it changes no ABI, no exported symbol and no
           # vermagic. 32-bit apps still run via CONFIG_COMPAT.
@@ -93,13 +104,31 @@ jobs:
             STRIP=llvm-strip
             CROSS_COMPILE=aarch64-linux-gnu-
             CLANG_TRIPLE=aarch64-linux-gnu
-            "KCFLAGS=-Wno-error=implicit-function-declaration -Wno-error=implicit-int -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=return-type -Wno-error=macro-redefined -Wno-error=array-bounds"
+            # First line: demote things clang 18 made errors. Second line: turn
+            # off the categories that only produce noise on 2018-era code
+            # (-Wstrict-prototypes alone fires on nearly every function here).
+            # None of these affect codegen.
+            "KCFLAGS=-Wno-error=implicit-function-declaration -Wno-error=implicit-int -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=return-type -Wno-error=macro-redefined -Wno-error=array-bounds -Wno-strict-prototypes -Wno-deprecated-non-prototype -Wno-missing-prototypes -Wno-unused-but-set-variable -Wno-address-of-packed-member -Wno-sometimes-uninitialized -Wno-enum-conversion -Wno-constant-conversion -Wno-tautological-compare"
           )
 
           printf '%s\n' "${ARGS[@]}"
 
           make O=out "${ARGS[@]}" RMX1821_defconfig
-          make O=out -j"$(nproc)" "${ARGS[@]}" Image.gz
+
+          # Keep the full log on disk, and print a short digest even on failure.
+          set +e
+          make O=out -j"$(nproc)" "${ARGS[@]}" Image.gz 2>&1 | tee ../build.log
+          rc=${PIPESTATUS[0]}
+          set -e
+
+          echo "=== warning summary (top 15 categories) ==="
+          grep -oE '\[-W[a-zA-Z0-9_,=+-]+\]' ../build.log | sort | uniq -c | sort -rn | head -15 || true
+          echo "warning lines: $(grep -c 'warning:' ../build.log || true)"
+          echo "error lines:   $(grep -c 'error:'   ../build.log || true)"
+          if [ "$rc" -ne 0 ]; then
+            echo "make failed with exit code $rc"
+            exit "$rc"
+          fi
 
           echo "=== kernel release (expect 4.14.235-M.A.P) ==="
           cat out/include/config/kernel.release

@@ -37,7 +37,12 @@ Nothing on the device has changed. The phone still runs `4.14.235-M.A.P` at 60 H
    add `subdir-ccflags-y += -Werror` and the top Makefile adds `-Werror=strict-prototypes`
    etc. Fix: demote `-Werror` → `-Wno-error` across all `Makefile`/`Kbuild`/`*.mk` before
    building.
-7. **Run `44921708014` — in progress** (`variant=69`), started after the `-Werror` fix.
+7. **Run `44921708014` — failed** at 8m09s, at the very end. `vmlinux` linked successfully; the
+   DTB step died on `../scripts/dtc/dtc_overlay: Exec format error` — MTK ships that tool as
+   a prebuilt **x86-64** binary. Fix: point `cmd_dtc` at kbuild's own host-arch `dtc`
+   (`$(objtree)/scripts/dtc/dtc`).
+8. **Next run — pending** (`variant=69`), with the `dtc_overlay` fix and log noise reduction
+   (`-Wno-strict-prototypes` etc., plus a warning-category summary).
 
 Check it with:
 
