@@ -17,9 +17,7 @@ permissions:
 
 jobs:
   build:
-    # arm64 hosted runner: native aarch64 clang, no cross-compile target games.
-    # Free for public repos. If the label is unavailable, swap to ubuntu-24.04
-    # and add gcc-aarch64-linux-gnu + --target handling.
+    # arm64 hosted runner: native aarch64 clang. Free for public repos.
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
 
@@ -31,42 +29,70 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             build-essential bc bison flex python3 device-tree-compiler \
-            libssl-dev clang lld llvm
+            libssl-dev clang lld llvm binutils
+
+          # Some images don't ship the target-prefixed binutils names.
+          for t in as ld ar nm objcopy objdump strip elfedit; do
+            command -v "aarch64-linux-gnu-$t" >/dev/null 2>&1 || \
+              sudo ln -sf "$(command -v "$t")" "/usr/local/bin/aarch64-linux-gnu-$t"
+          done
+
+          echo "clang: $(clang --version | head -1)"
+          echo "as:    $(aarch64-linux-gnu-as --version | head -1)"
+          echo "lld:   $(ld.lld --version)"
 
       - name: Fetch kernel source
         run: |
           git clone --depth=1 -b M.A.P \
             https://github.com/Maanush2004/android_kernel_realme_RMX1821 src
 
-      - name: Patch panel timing
+      - name: Patch config and panel timing
         working-directory: src
         env:
           VARIANT: ${{ inputs.variant }}
         run: |
+          # The compat vDSO needs a 32-bit ARM toolchain we don't ship. It is a
+          # leaf feature: disabling it changes no ABI, no exported symbol and no
+          # vermagic. 32-bit apps still run via CONFIG_COMPAT.
+          sed -i 's/^CONFIG_COMPAT_VDSO=y/# CONFIG_COMPAT_VDSO is not set/' \
+            arch/arm64/configs/RMX1821_defconfig
+
           F=drivers/misc/mediatek/lcm/ili9881_hd_dsi_vdo_qc_inx_zal1810/ili9881_hd_dsi_vdo_qc_inx_zal1810.c
           sed -i 's/params->dsi.vertical_frontporch = 236;/params->dsi.vertical_frontporch = 16;/' "$F"
           if [ "$VARIANT" = "72" ]; then
             sed -i 's/params->dsi.PLL_CLOCK = 360;/params->dsi.PLL_CLOCK = 376;/' "$F"
           fi
-          echo "=== effective values ==="
+
+          echo "=== effective panel values ==="
           grep -nE "vertical_frontporch = |PLL_CLOCK = " "$F"
+          echo "=== compat vdso ==="
+          grep -n "COMPAT_VDSO" arch/arm64/configs/RMX1821_defconfig
 
       - name: Build Image.gz
         working-directory: src
         run: |
-          export ARCH=arm64
-          export CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm
-          export OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
-          # old tree, modern clang: demote diagnostics that clang 16+ made errors
-          export KCFLAGS="-Wno-error=implicit-function-declaration \
-          -Wno-error=implicit-int -Wno-error=incompatible-pointer-types \
-          -Wno-error=int-conversion -Wno-error=return-type \
-          -Wno-error=macro-redefined -Wno-error=array-bounds"
+          # MUST be make arguments. Environment variables lose to the kernel's
+          # own assignments (CC = $(CROSS_COMPILE)gcc).
+          ARGS=(
+            ARCH=arm64
+            CC=clang
+            LD=ld.lld
+            AR=llvm-ar
+            NM=llvm-nm
+            OBJCOPY=llvm-objcopy
+            OBJDUMP=llvm-objdump
+            STRIP=llvm-strip
+            CROSS_COMPILE=aarch64-linux-gnu-
+            CLANG_TRIPLE=aarch64-linux-gnu
+            "KCFLAGS=-Wno-error=implicit-function-declaration -Wno-error=implicit-int -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=return-type -Wno-error=macro-redefined -Wno-error=array-bounds"
+          )
 
-          make O=out RMX1821_defconfig
-          make O=out -j"$(nproc)" Image.gz
+          printf '%s\n' "${ARGS[@]}"
 
-          echo "=== kernel release (must be 4.14.235-M.A.P) ==="
+          make O=out "${ARGS[@]}" RMX1821_defconfig
+          make O=out -j"$(nproc)" "${ARGS[@]}" Image.gz
+
+          echo "=== kernel release (expect 4.14.235-M.A.P) ==="
           cat out/include/config/kernel.release
           echo "=== output ==="
           ls -lh out/arch/arm64/boot/Image.gz
