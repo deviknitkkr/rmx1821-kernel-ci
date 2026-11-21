@@ -2,6 +2,10 @@
 
 Last updated: 2026-11-21.
 
+> **Keep this file current.** After every build, flash, or new finding, update the table at
+> the top, append to the timeline, and adjust "verified vs. assumed". The repo is the only
+> memory of this project — the phone may not survive it.
+
 ## Where things stand
 
 | Item | State |

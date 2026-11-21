@@ -43,7 +43,34 @@ Runner: `ubuntu-24.04-arm` (native aarch64; free for public repos). If that labe
 disappears, switch to `ubuntu-24.04` and add `gcc-aarch64-linux-gnu` plus an explicit
 `--target=`; nothing else changes.
 
-## The three bugs found (do not reintroduce them)
+## Exactly what the workflow changes in the kernel source
+
+The checkout is a clean pinned commit. These are the **only** edits, all applied by
+`sed` in the "Patch config and panel timing" step:
+
+| # | Path | Change | Affects runtime? |
+|---|---|---|---|
+| 1 | `drivers/misc/mediatek/lcm/ili9881_hd_dsi_vdo_qc_inx_zal1810/ili9881_hd_dsi_vdo_qc_inx_zal1810.c` | `vertical_frontporch` 236 → 16 | **yes — the actual feature** |
+| 2 | same file (variant `72` only) | `PLL_CLOCK` 360 → 376 | **yes — variant 72 only** |
+| 3 | `arch/arm64/configs/RMX1821_defconfig` | `CONFIG_COMPAT_VDSO=y` → not set | no (leaf feature, no ABI/vermagic) |
+| 4 | every `Makefile`, `Kbuild`, `*.mk` containing `-Werror` | `-Werror` → `-Wno-error` (with the hyphen form rewritten to `=`) | no (build strictness only) |
+| 5 | `scripts/Makefile.lib` | `$(srctree)/scripts/dtc/dtc_overlay` → `$(objtree)/scripts/dtc/dtc` | no (host tool path) |
+| 6 | make invocation (`KCFLAGS=...`) | demote/disable noisy warning categories | no (compiler flags) |
+
+Nothing else is touched. In particular:
+
+- `Makefile` version fields are untouched — still `4.14.235`, and the build **fails** if
+  `kernel.release` is anything but `4.14.235-M.A.P`.
+- `CONFIG_LOCALVERSION="-M.A.P"`, `CONFIG_MODVERSIONS=y`, `CONFIG_MODULE_SIG` off are
+  unchanged.
+- No headers, no exported symbols, no driver logic, no device tree, no defconfig option
+  other than `COMPAT_VDSO`.
+
+Items 4–6 exist purely so 2018-era MTK code compiles under clang 18 on an arm64 runner.
+They change no generated machine code. The differential-build check in `status.md` exists
+to prove that claim.
+
+## Build pitfalls found (do not reintroduce them)
 
 ### 1. `CC=clang` must be a *make argument*, not an environment variable
 
