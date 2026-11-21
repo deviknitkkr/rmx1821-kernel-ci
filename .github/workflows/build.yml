@@ -1,7 +1,17 @@
 name: build-kernel
 
 # Builds the RMX1821 (Realme 3) kernel with a raised panel refresh rate.
-# Nothing here touches the device; it only produces Image.gz.
+# Nothing here touches the device; it only produces Image.gz / a boot image.
+#
+# Toolchain: the working kernel on the phone reports
+#   Linux version 4.14.235-M.A.P (nobody@android-build)
+#   (Android (6052599 based on r353983c1) clang version 9.0.3 ...)
+# so every build uses that same AOSP clang (r353983c) + AOSP GCC 4.9
+# prebuilts, on an x86_64 host. The previous arm64-runner build used
+# Ubuntu clang 18.1.3 and produced kernels that reset at the Realme logo
+# both with the 69 Hz timing and with stock timing (bootloop control),
+# while the boot header, DTB and ramdisk were byte-identical to the
+# working backup. The compiler was the only remaining variable.
 
 on:
   workflow_dispatch:
@@ -15,31 +25,53 @@ on:
 permissions:
   contents: read
 
+env:
+  CLANG_DIR: clang-r353983c
+  GCC_AARCH64_DIR: aarch64-linux-android-4.9
+  GCC_ARM_DIR: arm-linux-androideabi-4.9
+  AOSP_PREBUILTS: https://android.googlesource.com/platform/prebuilts
+
 jobs:
   build:
-    # arm64 hosted runner: native aarch64 clang. Free for public repos.
-    runs-on: ubuntu-24.04-arm
+    # x86_64: the AOSP 2021 prebuilts are x86_64 Linux binaries.
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install build dependencies
+      - name: Install host dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            build-essential bc bison flex python3 device-tree-compiler \
-            libssl-dev clang lld llvm binutils
+            build-essential bc bison flex python3 device-tree-compiler libssl-dev
+          # Deliberately no distro clang/llvm/binutils: the kernel is compiled
+          # with the AOSP 2021 toolchain fetched in the next step.
 
-          # Some images don't ship the target-prefixed binutils names.
-          for t in as ld ar nm objcopy objdump strip elfedit; do
-            command -v "aarch64-linux-gnu-$t" >/dev/null 2>&1 || \
-              sudo ln -sf "$(command -v "$t")" "/usr/local/bin/aarch64-linux-gnu-$t"
+      - name: Fetch AOSP toolchain (clang 9.0.3 + GCC 4.9)
+        run: |
+          set -euo pipefail
+          TC="$RUNNER_TEMP/tc"
+          mkdir -p "$TC/clang" "$TC/aarch64" "$TC/arm"
+
+          curl -fsSL \
+            "$AOSP_PREBUILTS/clang/host/linux-x86/+archive/refs/heads/android10-release/${CLANG_DIR}.tar.gz" \
+            | tar -xz -C "$TC/clang"
+          curl -fsSL \
+            "$AOSP_PREBUILTS/gcc/linux-x86/aarch64/${GCC_AARCH64_DIR}/+archive/refs/heads/android10-release.tar.gz" \
+            | tar -xz -C "$TC/aarch64"
+          curl -fsSL \
+            "$AOSP_PREBUILTS/gcc/linux-x86/arm/${GCC_ARM_DIR}/+archive/refs/heads/android10-release.tar.gz" \
+            | tar -xz -C "$TC/arm"
+
+          for d in clang aarch64 arm; do
+            echo "$TC/$d/bin" >> "$GITHUB_PATH"
           done
 
-          echo "clang: $(clang --version | head -1)"
-          echo "as:    $(aarch64-linux-gnu-as --version | head -1)"
-          echo "lld:   $(ld.lld --version)"
+          echo "=== toolchain ==="
+          "$TC/clang/bin/clang" --version | head -1
+          "$TC/aarch64/bin/aarch64-linux-android-gcc" --version | head -1
+          "$TC/arm/bin/arm-linux-androideabi-gcc" --version | head -1
 
       - name: Fetch kernel source (pinned)
         uses: actions/checkout@v4
@@ -59,53 +91,15 @@ jobs:
           grep -qE "^SUBLEVEL = 235$" Makefile || {
             echo "source is not 4.14.235 — refusing to build"; exit 1; }
 
-      - name: Patch config and panel timing
+      - name: Patch panel timing
         working-directory: src
         env:
           VARIANT: ${{ inputs.variant }}
         run: |
-          # Build strictness only. MTK adds `subdir-ccflags-y += -Werror` in many
-          # directories (after KCFLAGS, so -Wno-error=... cannot override it) and
-          # the top Makefile forces -Werror=strict-prototypes etc. clang 12 did
-          # not flag those; clang 18+ does. Demote every -Werror to -Wno-error.
-          # This changes no generated code, no ABI, no vermagic.
-          #
-          # The first expression matters: the GCC-style hyphen spelling
-          # `-Werror-implicit-function-declaration` must become
-          # `-Wno-error=implicit-function-declaration`; leaving it as
-          # `-Wno-error-implicit-...` makes clang emit 31k
-          # -Wunknown-warning-option lines, one per object.
-          grep -rl --include='Makefile' --include='Kbuild' --include='*.mk' -- '-Werror' . \
-            | xargs -r sed -i \
-                -e 's/-Werror-\([a-zA-Z0-9_-]*\)/-Wno-error=\1/g' \
-                -e 's/-Werror/-Wno-error/g'
-          echo "remaining -Werror occurrences: $(grep -rl --include='Makefile' --include='Kbuild' --include='*.mk' -- '-Werror' . | wc -l)"
-
-          # ...but keep this one as an error. clang does not let plain -Werror
-          # promote "unknown warning option", and cc-option/cc-disable-warning
-          # rely on exactly this flag to reject GCC-only -Wno-* options. Without
-          # it, eight GCC warnings get passed to every object and each emits an
-          # -Wunknown-warning-option line (~31k lines total).
-          sed -i 's/-Wno-error=unknown-warning-option/-Werror=unknown-warning-option/g' Makefile
-          grep -n "unknown-warning-option" Makefile
-
-          # MTK checks in a prebuilt x86-64 scripts/dtc/dtc_overlay. On an arm64
-          # runner that is "Exec format error". kbuild already builds its own
-          # dtc for the host arch (HOSTCC scripts/dtc/dtc.o) and it accepts the
-          # same -@ -O dtb -b 0 flags, so point cmd_dtc at that instead.
-          sed -i 's#$(srctree)/scripts/dtc/dtc_overlay#$(objtree)/scripts/dtc/dtc#' \
-            scripts/Makefile.lib
-          grep -n "cmd_dtc =" -A2 scripts/Makefile.lib
-          if grep -q "dtc_overlay" scripts/Makefile.lib; then
-            echo "dtc_overlay is still referenced by Makefile.lib"; exit 1
-          fi
-
-          # The compat vDSO needs a 32-bit ARM toolchain we don't ship. It is a
-          # leaf feature: disabling it changes no ABI, no exported symbol and no
-          # vermagic. 32-bit apps still run via CONFIG_COMPAT.
-          sed -i 's/^CONFIG_COMPAT_VDSO=y/# CONFIG_COMPAT_VDSO is not set/' \
-            arch/arm64/configs/RMX1821_defconfig
-
+          # Only the panel timing is changed. No Makefile/CONFIG edits:
+          # clang 9.0.3 is the compiler this tree was built with, so the
+          # clang-18 -Werror demotion and COMPAT_VDSO workarounds are gone
+          # (the stock config has CONFIG_COMPAT_VDSO=y).
           F=drivers/misc/mediatek/lcm/ili9881_hd_dsi_vdo_qc_inx_zal1810/ili9881_hd_dsi_vdo_qc_inx_zal1810.c
           # Conservative ladder: the panel bootlooped at vfp 16, so test stock first,
           # then step down. vtotal = 1532 + vfp (vsa 4 + vbp 8 + active 1520).
@@ -125,32 +119,29 @@ jobs:
           echo "=== effective panel values ==="
           echo "variant=$VARIANT vfp=$VFP pll=$PLL"
           grep -nE "vertical_frontporch = |PLL_CLOCK = " "$F"
-          echo "=== compat vdso ==="
+
+          echo "=== config baseline ==="
           grep -n "COMPAT_VDSO" arch/arm64/configs/RMX1821_defconfig
+          git status --short
 
       - name: Build Image.gz
         working-directory: src
         env:
           VARIANT: ${{ inputs.variant }}
         run: |
-          # MUST be make arguments. Environment variables lose to the kernel's
+          # Make arguments only: environment variables lose to the kernel's
           # own assignments (CC = $(CROSS_COMPILE)gcc).
+          #
+          # CC/CLANG_TRIPLE/CROSS_COMPILE resolve through $GITHUB_PATH to the
+          # AOSP clang-r353983c and GCC 4.9 prebuilts. LD/AR/NM/OBJCOPY...
+          # default to the matching aarch64-linux-android-* binutils from
+          # that GCC prebuilt, i.e. the original 2021 build's toolchain.
           ARGS=(
             ARCH=arm64
             CC=clang
-            LD=ld.lld
-            AR=llvm-ar
-            NM=llvm-nm
-            OBJCOPY=llvm-objcopy
-            OBJDUMP=llvm-objdump
-            STRIP=llvm-strip
-            CROSS_COMPILE=aarch64-linux-gnu-
-            CLANG_TRIPLE=aarch64-linux-gnu
-            # First line: demote things clang 18 made errors. Second line: turn
-            # off the categories that only produce noise on 2018-era code
-            # (-Wstrict-prototypes alone fires on nearly every function here).
-            # None of these affect codegen.
-            "KCFLAGS=-Wno-error=implicit-function-declaration -Wno-error=implicit-int -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=return-type -Wno-error=macro-redefined -Wno-error=array-bounds -Wno-strict-prototypes -Wno-deprecated-non-prototype -Wno-missing-prototypes -Wno-unused-but-set-variable -Wno-address-of-packed-member -Wno-sometimes-uninitialized -Wno-enum-conversion -Wno-constant-conversion -Wno-tautological-compare"
+            CLANG_TRIPLE=aarch64-linux-android-
+            CROSS_COMPILE=aarch64-linux-android-
+            CROSS_COMPILE_ARM32=arm-linux-androideabi-
           )
 
           printf '%s\n' "${ARGS[@]}"
@@ -178,7 +169,15 @@ jobs:
           if [ "$REL" != "4.14.235-M.A.P" ]; then
             echo "release mismatch: $REL — this image must not be flashed"
             exit 1
-          fi 
+          fi
+
+          echo "=== compiler recorded in the kernel banner ==="
+          BANNER=$(gzip -dc out/arch/arm64/boot/Image.gz | strings | grep -m1 '^Linux version')
+          echo "$BANNER"
+          case "$BANNER" in
+            *"clang version 9.0.3"*) echo "toolchain OK" ;;
+            *) echo "unexpected compiler — refusing to publish"; exit 1 ;;
+          esac
 
           echo "=== output ==="
           ls -lh out/arch/arm64/boot/Image.gz
@@ -189,7 +188,8 @@ jobs:
           F=drivers/misc/mediatek/lcm/ili9881_hd_dsi_vdo_qc_inx_zal1810/ili9881_hd_dsi_vdo_qc_inx_zal1810.c
           {
             echo "release: $REL"
-            echo "variant: ${VARIANT:-69}"
+            echo "variant: ${VARIANT:-stock}"
+            echo "compiler: $BANNER"
             echo "image_sha256: $(sha256sum out/arch/arm64/boot/Image.gz | cut -d' ' -f1)"
             echo "defconfig_sha256: $(sha256sum arch/arm64/configs/RMX1821_defconfig | cut -d' ' -f1)"
             echo "--- panel timing ---"
@@ -219,7 +219,7 @@ jobs:
   # ---------------------------------------------------------------------------
   repack:
     needs: build
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
@@ -233,12 +233,12 @@ jobs:
         run: |
           set -euo pipefail
           # Same Magisk version as installed on the phone (v31.1). The APK's
-          # lib/arm64-v8a/libmagiskboot.so is a static executable.
+          # lib/x86_64/libmagiskboot.so is a static executable.
           curl -fsSL -o magisk.apk \
             https://github.com/topjohnwu/Magisk/releases/download/v31.1/Magisk-v31.1.apk
           echo "89cefac0a318afa39fb3880c45c87b036c05bc1ebf02a7a715b7f8d7c26ac6e7  magisk.apk" \
             | sha256sum -c -
-          unzip -o -j magisk.apk lib/arm64-v8a/libmagiskboot.so -d .
+          unzip -o -j magisk.apk lib/x86_64/libmagiskboot.so -d .
           mv libmagiskboot.so magiskboot
           chmod +x magiskboot
           # No args prints usage and exits nonzero; do not fail the step under pipefail.
