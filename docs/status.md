@@ -15,8 +15,8 @@ Last updated: 2026-11-21.
 | Backups dumped + published | done (`backup-v1` release) |
 | CI pipeline | working (3 runs to green) |
 | Kernel built successfully | yes, but the first green build was **4.14.282** — discarded |
-| Kernel built at **4.14.235** | run `44923932703` in progress |
-| Boot image repacked | not yet |
+| Kernel built at **4.14.235** | yes — run `44923932703`, release `4.14.235-M.A.P` |
+| Boot image repacked in CI | job added; next run produces `boot-69hz-magisk` |
 | **Flashed to the phone** | **not yet — phone is still on stock kernel** |
 
 Nothing on the device has changed. The phone still runs `4.14.235-M.A.P` at 60 Hz.
@@ -52,10 +52,15 @@ Nothing on the device has changed. The phone still runs `4.14.235-M.A.P` at 60 H
    That image is ABI-adjacent to the wrong kernel and **must not be flashed**. The same run
    also revealed 31,256 bogus `-Wunknown-warning-option` lines from the GCC-style
    `-Werror-implicit-function-declaration` spelling.
-9. **Run `44923932703` — in progress** (`variant=69`). Source pinned to commit
-   `68d7a37a267743f12ac7d85054fea74564b8f7ea` (`SUBLEVEL = 235`, 2021-06-21). The build now
-   aborts unless the release string is exactly `4.14.235-M.A.P`, and the artifact includes
-   `.config` and `report.txt` (panel timing + `__crc_*` dump) for on-device verification.
+9. **Run `44923932703` — SUCCESS** in 8m27s, pinned source. `kernel.release` is exactly
+   **`4.14.235-M.A.P`**; `report.txt` shows `vertical_frontporch = 16`, `PLL_CLOCK = 360`
+   (the 365 line is the inactive command-mode branch); `Image.gz` sha256
+   `0c95d4f0…d9f1f8`. Two cosmetic bugs remained: 31k `-Wunknown-warning-option` lines (the
+   demotion had disabled `-Werror=unknown-warning-option`, which `cc-option` needs to reject
+   GCC-only flags) and `.config` missing from the artifact (dotfile excluded by
+   `upload-artifact`). Both fixed; `include-hidden-files: true` added.
+10. **Next run — pending** (`variant=69`), with the `repack` job: builds, repacks into the
+    Magisk boot, verifies `.backup`/kernel bytes/32 MiB, uploads `boot-69hz-magisk`.
 
 Check it with:
 

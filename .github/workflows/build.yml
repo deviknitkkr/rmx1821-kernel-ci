@@ -81,6 +81,14 @@ jobs:
                 -e 's/-Werror/-Wno-error/g'
           echo "remaining -Werror occurrences: $(grep -rl --include='Makefile' --include='Kbuild' --include='*.mk' -- '-Werror' . | wc -l)"
 
+          # ...but keep this one as an error. clang does not let plain -Werror
+          # promote "unknown warning option", and cc-option/cc-disable-warning
+          # rely on exactly this flag to reject GCC-only -Wno-* options. Without
+          # it, eight GCC warnings get passed to every object and each emits an
+          # -Wunknown-warning-option line (~31k lines total).
+          sed -i 's/-Wno-error=unknown-warning-option/-Werror=unknown-warning-option/g' Makefile
+          grep -n "unknown-warning-option" Makefile
+
           # MTK checks in a prebuilt x86-64 scripts/dtc/dtc_overlay. On an arm64
           # runner that is "Exec format error". kbuild already builds its own
           # dtc for the host arch (HOSTCC scripts/dtc/dtc.o) and it accepts the
@@ -189,6 +197,8 @@ jobs:
             src/out/arch/arm64/boot/Image.gz
             src/out/.config
             src/report.txt
+          # .config is a dotfile; without this it is silently dropped.
+          include-hidden-files: true
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
