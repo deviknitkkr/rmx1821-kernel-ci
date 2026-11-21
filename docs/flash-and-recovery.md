@@ -1,12 +1,12 @@
 # Flash and recovery
 
-**The 69 Hz image has been tested and bootlooped; the user rolled back.** The phone is back
-on the stock kernel, and `boot` hashes to `b5c65e59…` (the backup). A **stock-timing
-control** (run `44932757133`, no vfp/PLL change) is building to separate the panel timing
-from the clang-18 toolchain. The marker test below is still the zero-risk way to learn
-whether `fastboot boot` works on this LK.
+**The 69 Hz tagged image was flashed and bootlooped at the Realme logo; the user rolled back.**
+The phone is back on the stock kernel, and `boot` hashes to `b5c65e59…` (the backup).
+**`fastboot boot` is proven**: the stock marker booted and `/proc/cmdline` showed
+`ramtest=stock_marker`. The **stock-timing control** is published as release
+**`stock-control-v1`**; test it via RAM boot, which writes nothing.
 
-## Step 0: prove `fastboot boot` loads the uploaded image
+## Step 0: `fastboot boot` — proven
 
 Download on the host:
 
@@ -21,46 +21,46 @@ fastboot boot boot-ramtest-marker.img
 cat /proc/cmdline | tr ' ' '\n' | grep ramtest
 ```
 
-- `ramtest=stock_marker` → the upload is honored. Continue below.
-- no output → LK ignores uploaded images; only a real flash can test the kernel
-  (`fastboot flash boot`, with `backup-v1` as the rollback).
+- `ramtest=stock_marker` → **observed; the upload is honored.**
+- no output → would mean LK ignores uploaded images (not the case here).
 
 This image has the **stock kernel** (sha `98e4a881…`), so it is risk-free. If it boots,
-`uname -v` will still show 2021 — that is expected; the marker is the test.
+`uname -v` will still show 2021 — that is expected; the marker is the test. Keep the
+procedure for re-checking if RAM boot ever stops working.
 
 ## Test first: RAM boot (writes nothing)
 
-> **Do not boot the 69 Hz image again** — it bootlooped. Use this procedure for the
-> stock-timing control or a conservative variant once it is built.
-
-Use the **tagged** 69 Hz image so the boot itself proves which kernel ran:
+Use RAM boot for every kernel test. It writes nothing, and a normal reboot returns to the
+current kernel. Test the **stock-timing control** first:
 
 ```
-https://github.com/deviknitkkr/rmx1821-kernel-ci/releases/download/ramboot-diag-v1/boot-69hz-tagged.img
-sha256 4e6871ceac7bd82af7ec0bbe81bb0ed116a1cd3a7a8cd297d3965bb429d9a360
+https://github.com/deviknitkkr/rmx1821-kernel-ci/releases/download/stock-control-v1/boot-stock-control.img
+sha256 a990490ba29dbbbf9da17a2492272846f72f7fd0e7cd9b38a0da50307a3a89e9
 ```
-
-(The original `boot-69hz-v1/boot-69hz-magisk.img`, sha256 `7c5975d4…4d568bd`, has the same
-kernel without the cmdline marker.)
 
 Download it on the **host** (Pixel/PC), then:
 
 ```bash
 # phone: su -c 'reboot bootloader'   (or Vol Up + Vol Down + Power)
-fastboot boot boot-69hz-tagged.img
+fastboot boot boot-stock-control.img
 # after boot:
-uname -v                                          # expect #1 ... Sat Nov 21 2026
-cat /proc/cmdline | tr ' ' '\n' | grep ramtest    # expect ramtest=69hz_marker
+uname -v                                          # expect #1 ... Sat Nov 21 18:04:50 UTC 2026
+dumpsys display | grep -E "supportedModes|mActiveModeId"   # expect 60 Hz
 ```
 
-- nothing is written; a normal reboot returns to the current kernel
-- Magisk comes up from the image's ramdisk, so root works
+- **boots at 60 Hz** → the clang-18 build is fine; the 69 Hz timing caused the bootloop.
+  Build/test the conservative variants (`61`, `65`, `66`, `68`, `69`) the same way.
+- **bootloops** → the clang-18 build/toolchain is the cause; do not flash.
+- nothing is written; Magisk comes up from the image's ramdisk, so root works
 - if the panel refuses the timing, power-cycle; the boot partition is untouched
 
-Checks once it boots:
+> **Do not boot the 69 Hz tagged image again** (`boot-69hz-tagged.img`, sha
+> `4e6871ce…`) — it bootlooped at the Realme logo.
+
+Checks once a raised-refresh variant boots:
 
 ```bash
-# Developer options -> Show refresh rate  (expect ~69)
+# Developer options -> Show refresh rate  (expect ~61-69 depending on variant)
 dumpsys display | grep supportedModes
 dumpsys SurfaceFlinger | grep -E "VSYNC period|primary range"
 su -c 'dmesg | grep -iE "disagrees about version|unknown symbol"'
@@ -244,13 +244,13 @@ fastboot is unreachable and the device is truly dead.
 
 | Symptom | Meaning | Action |
 |---|---|---|
-| Bootloop after installing the 69 Hz image | kernel/panel hang before Android; rollback works | restore boot (done); test the stock-timing control, then conservative vfp |
-| `fastboot boot` prints OKAY but the stock kernel is running after reboot | LK ignored/crashed on the uploaded image (`bootreason=lk_crash`); nothing was written | run the marker test; if no marker, only a real flash can test the kernel |
+| Bootloop after flashing the 69 Hz tagged image, at the Realme logo | kernel/panel hang before Android; rollback works | rollback done; test the stock-timing control via RAM boot, then conservative vfp |
+| `fastboot boot` prints OKAY but the stock kernel is running after reboot | the uploaded image crashed/hung before Android (`bootreason=lk_crash`); nothing was written | RAM boot works now (marker passed); test the control, do not flash |
 | Black screen / no backlight after logo | panel rejected the new timing | restore boot |
 | Boot logo, then reboot loop | kernel panic | restore boot |
 | Boots, but scrolling is *worse* / beat-y | HWC still reports 60 while panel runs faster | restore boot, see `status.md` |
 | Boots, but Wi-Fi/touch/etc. dead | vendor module vermagic mismatch (wrong kernel release string) | restore boot; rebuild with the exact defconfig |
-| Boots, overlay shows 69/72, smooth | success | keep, then try variant 72 |
+| Boots, overlay shows ~68.5/71.5, smooth | success | keep, then try variant 72 |
 
 ## Never flash
 

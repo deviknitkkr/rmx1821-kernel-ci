@@ -7,10 +7,10 @@ on:
   workflow_dispatch:
     inputs:
       variant:
-        description: "69 = vfp 16, 72 = vfp 16 + PLL 376, stock = no timing change (control)"
+        description: "stock=59.94, 61=vfp200, 65=vfp100, 66=vfp60, 68=vfp36, 69=vfp16, 72=vfp16+PLL376"
         type: choice
-        options: ["69", "72", "stock"]
-        default: "69"
+        options: ["stock", "61", "65", "66", "68", "69", "72"]
+        default: "stock"
 
 permissions:
   contents: read
@@ -107,16 +107,23 @@ jobs:
             arch/arm64/configs/RMX1821_defconfig
 
           F=drivers/misc/mediatek/lcm/ili9881_hd_dsi_vdo_qc_inx_zal1810/ili9881_hd_dsi_vdo_qc_inx_zal1810.c
-          if [ "$VARIANT" = "stock" ]; then
-            echo "stock control: leaving vertical_frontporch / PLL_CLOCK untouched"
-          else
-            sed -i 's/params->dsi.vertical_frontporch = 236;/params->dsi.vertical_frontporch = 16;/' "$F"
-            if [ "$VARIANT" = "72" ]; then
-              sed -i 's/params->dsi.PLL_CLOCK = 360;/params->dsi.PLL_CLOCK = 376;/' "$F"
-            fi
-          fi
+          # Conservative ladder: the panel bootlooped at vfp 16, so test stock first,
+          # then step down. vtotal = 1532 + vfp (vsa 4 + vbp 8 + active 1520).
+          case "$VARIANT" in
+            stock) VFP=236; PLL=360 ;;  # 59.94 Hz (control)
+            61)    VFP=200; PLL=360 ;;  # ~61.2 Hz
+            65)    VFP=100; PLL=360 ;;  # ~64.9 Hz
+            66)    VFP=60;  PLL=360 ;;  # ~66.6 Hz
+            68)    VFP=36;  PLL=360 ;;  # ~67.6 Hz
+            69)    VFP=16;  PLL=360 ;;  # ~68.5 Hz
+            72)    VFP=16;  PLL=376 ;;  # ~71.5 Hz
+            *) echo "unknown variant: $VARIANT"; exit 1 ;;
+          esac
+          sed -i "s/params->dsi.vertical_frontporch = 236;/params->dsi.vertical_frontporch = $VFP;/" "$F"
+          sed -i "s/params->dsi.PLL_CLOCK = 360;/params->dsi.PLL_CLOCK = $PLL;/" "$F"
 
           echo "=== effective panel values ==="
+          echo "variant=$VARIANT vfp=$VFP pll=$PLL"
           grep -nE "vertical_frontporch = |PLL_CLOCK = " "$F"
           echo "=== compat vdso ==="
           grep -n "COMPAT_VDSO" arch/arm64/configs/RMX1821_defconfig
@@ -234,7 +241,8 @@ jobs:
           unzip -o -j magisk.apk lib/arm64-v8a/libmagiskboot.so -d .
           mv libmagiskboot.so magiskboot
           chmod +x magiskboot
-          ./magiskboot 2>&1 | head -2
+          # No args prints usage and exits nonzero; do not fail the step under pipefail.
+          ./magiskboot 2>&1 | head -2 || true
 
       - name: Repack kernel into the Magisk boot
         run: |

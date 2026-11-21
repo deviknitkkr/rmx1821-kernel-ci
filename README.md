@@ -1,21 +1,27 @@
 # RMX1821 kernel — raised panel refresh
 
-> **Current state (2026-11-21):** the 69 Hz image was tested and **bootlooped**; the user
-> rolled back and the phone is back on the stock kernel. A **stock-timing control** (same
-> clang 18 build, no vfp/PLL change) is building. Start with
-> [`docs/status.md`](docs/status.md); do not re-flash the 69 Hz image blindly.
+> **Current state (2026-11-21):** the 69 Hz tagged image was flashed and **bootlooped** at
+> the Realme logo; the user rolled back and the phone is back on stock. `fastboot boot` is
+> **proven working** (stock marker passed). The **stock-timing control** is published as
+> release **`stock-control-v1`**; test it via RAM boot. Start with
+> [`docs/status.md`](docs/status.md); do not re-flash the 69 Hz image.
 
 Builds `Image.gz` for the Realme 3 (`RMX1821`, MT6771, ILI9881 INX HD+ panel) with the
 panel's vertical front porch reduced, optionally with a 4.4% DSI PLL bump.
 
 | variant | vfp | PLL | expected refresh |
 |---|---|---|---|
-| `69` | 236 -> 16 | 360 (unchanged) | ~68.5 Hz |
-| `72` | 236 -> 16 | 360 -> 376 | ~71.5 Hz |
 | `stock` | 236 | 360 | 59.94 Hz (control) |
+| `61` | 200 | 360 | ~61.2 Hz |
+| `65` | 100 | 360 | ~64.9 Hz |
+| `66` | 60 | 360 | ~66.6 Hz |
+| `68` | 36 | 360 | ~67.6 Hz |
+| `69` | 16 | 360 | ~68.5 Hz |
+| `72` | 16 | 376 | ~71.5 Hz |
 
 The names are approximate. With `vsa`+`vbp` = 12 lines, vfp 16 gives `vtotal = 1548`, so
-blanking alone tops out at ~68.5 Hz (vfp 0 would be ~69.2 Hz).
+blanking alone tops out at ~68.5 Hz (vfp 0 would be ~69.2 Hz). The `stock` control is the
+current test; step down the ladder only after it boots.
 
 ## Full documentation
 
@@ -43,23 +49,33 @@ Start there if this device is lost, unbootable, or you are picking the project u
 
 ## Testing a kernel build
 
-The 69 Hz image **bootlooped**; do not re-flash it. Current test order:
+The 69 Hz tagged image **bootlooped**; do not re-flash it. `fastboot boot` is **proven
+working** — the stock marker booted and `/proc/cmdline` contained `ramtest=stock_marker`.
+Use RAM boot for every test; it writes nothing.
 
-1. **Stock-timing control** (run `44932757133`, `variant=stock`): confirm the repacked image
-   boots at 59.94 Hz. If it bootloops too, the clang-18 build/toolchain is the problem; if it
-   boots, the timing change is.
-2. If the control boots, build conservative variants (`vfp = 200`, `100`, `60`, `36`) and
-   step down. Do not jump back to `vfp = 16`.
+1. **Stock control** — release **`stock-control-v1`**:
 
-Use RAM boot when possible — it writes nothing:
+   ```
+   https://github.com/deviknitkkr/rmx1821-kernel-ci/releases/download/stock-control-v1/boot-stock-control.img
+   sha256 a990490ba29dbbbf9da17a2492272846f72f7fd0e7cd9b38a0da50307a3a89e9
+   ```
 
-```bash
-fastboot boot boot-ramtest-marker.img   # stock kernel + cmdline marker, safe
-cat /proc/cmdline | tr ' ' '\n' | grep ramtest   # ramtest=stock_marker means it works
-```
+   ```bash
+   fastboot boot boot-stock-control.img
+   uname -v   # expect #1 ... Sat Nov 21 18:04:50 UTC 2026 (clang 18)
+   dumpsys display | grep -E "supportedModes|mActiveModeId"   # expect 60 Hz
+   ```
 
-If `fastboot boot` is unproven on this LK, every test is a flash + rollback cycle. The
-rollback is `fastboot flash boot boot_current_magisk_RMX1821.img` from the Pixel or a laptop.
+   - **boots at 60 Hz** → the 69 Hz timing caused the bootloop; test the ladder
+     `61` (vfp 200), `65` (100), `66` (60), `68` (36), `69` (16).
+   - **bootloops** → the clang-18 build/toolchain is the cause; do not flash.
+
+2. If the control boots, dispatch a variant, repack, and RAM-boot it; repeat down the
+   ladder. Stop at the highest that boots, then back off one step.
+
+3. Do not flash until a variant is proven. Rollback if ever needed:
+   `fastboot flash boot boot_current_magisk_RMX1821.img` from `backup-v1` (the Pixel/laptop
+   can do this even if Android won't boot).
 
 Full verification and recovery detail: [`docs/flash-and-recovery.md`](docs/flash-and-recovery.md).
 
@@ -68,13 +84,15 @@ Full verification and recovery detail: [`docs/flash-and-recovery.md`](docs/flash
 Trigger CI, then download the kernel artifact:
 
 ```bash
-gh workflow run build.yml --repo deviknitkkr/rmx1821-kernel-ci -f variant=stock
+# after the stock control boots, the first ladder step is 61:
+gh workflow run build.yml --repo deviknitkkr/rmx1821-kernel-ci -f variant=61
 gh run list --repo deviknitkkr/rmx1821-kernel-ci --workflow build.yml --limit 3
-gh run download <run-id> --repo deviknitkkr/rmx1821-kernel-ci -n Image-stockhz -D ~/kernel-out
+gh run download <run-id> --repo deviknitkkr/rmx1821-kernel-ci -n Image-61hz -D ~/kernel-out
 ```
 
-The same run also has a `boot-stockhz-magisk` artifact with a directly flashable `boot.img`
-(the CI repack job). Validate it, then use the RAM-boot test above before flashing.
+The same run also has a `boot-61hz-magisk` artifact with a directly flashable `boot.img`
+(the CI repack job). Validate it, then use the RAM-boot test above before flashing. The
+control is already published, so no rebuild is needed for it.
 
 Recovery, if it does not boot:
 

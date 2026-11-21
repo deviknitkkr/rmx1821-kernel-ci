@@ -159,6 +159,11 @@ PLL step (360 MHz), which implies headroom rather than a hard panel limit.
 
 The CI applies these with `sed` (see `build.md`), so context drift cannot break the patch.
 
+> **Test result (2026-11-21):** the first `vfp = 16` image was flashed and bootlooped at the
+> Realme logo; it was rolled back. A stock-timing control (`vfp = 236`, PLL 360, same clang 18
+> build) is published as `stock-control-v1` to separate panel timing from the toolchain. Do
+> not flash `vfp = 16` again until a conservative step boots.
+
 ## DSI link budget
 
 3 lanes, RGB888, PLL 360 → ~720 Mbps/lane class, DSI PHY limit is ~1 Gbps/lane.

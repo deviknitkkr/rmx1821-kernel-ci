@@ -17,13 +17,24 @@ gh run list --repo deviknitkkr/rmx1821-kernel-ci --workflow build.yml --limit 5
 gh run watch <run-id> --repo deviknitkkr/rmx1821-kernel-ci
 ```
 
-`variant` is `69` (front porch only) or `72` (front porch + PLL 376).
+`variant` is one of the conservative ladder:
 
-Artifacts: `Image-69hz` / `Image-72hz` (kernel, `.config`, `report.txt`) and
-`boot-69hz-magisk` / `boot-72hz-magisk` (a directly flashable `boot.img` + `SHA256SUMS`).
+| variant | vfp | PLL | expected | purpose |
+|---|---|---|---|---|
+| `stock` | 236 | 360 | 59.94 Hz | control: separates timing from toolchain |
+| `61` | 200 | 360 | ~61.2 Hz | first safe step |
+| `65` | 100 | 360 | ~64.9 Hz | |
+| `66` | 60 | 360 | ~66.6 Hz | |
+| `68` | 36 | 360 | ~67.6 Hz | |
+| `69` | 16 | 360 | ~68.5 Hz | the original target (bootlooped) |
+| `72` | 16 | 376 | ~71.5 Hz | vfp + 4.4% PLL bump |
+
+Artifacts: `Image-<variant>hz` (kernel, `.config`, `report.txt`) and
+`boot-<variant>hz-magisk` (a directly flashable `boot.img` + `SHA256SUMS`). For the control
+that is `Image-stockhz` / `boot-stockhz-magisk`.
 
 ```bash
-gh run download <run-id> --repo deviknitkkr/rmx1821-kernel-ci -n Image-69hz -D ~/kernel-out
+gh run download <run-id> --repo deviknitkkr/rmx1821-kernel-ci -n Image-61hz -D ~/kernel-out
 ```
 
 > Artifacts of a public repo still require auth to download via the API. If the phone is
@@ -43,8 +54,13 @@ gh run download <run-id> --repo deviknitkkr/rmx1821-kernel-ci -n Image-69hz -D ~
 7. Runs a second `repack` job: downloads the pinned Magisk v31.1 APK, extracts the static
    `magiskboot`, fetches the current Magisk boot image from the `backup-v1` release,
    swaps only the kernel, verifies `.backup` is still present and the file fits 32 MiB, then
-   uploads `boot-69hz-magisk` / `boot-72hz-magisk` containing a **directly flashable**
-   `boot.img` + `SHA256SUMS`.
+   uploads `boot-<variant>hz-magisk` containing a **directly flashable** `boot.img` +
+   `SHA256SUMS`.
+
+> The first repack run (`44932757133`, stock control) failed because `./magiskboot` with no
+> args prints usage and exits 1 under `set -o pipefail`. Fixed with `|| true`. That control
+> image was repacked locally and published as release `stock-control-v1`; later runs use the
+> fixed job.
 
 Artifacts per run:
 
@@ -64,12 +80,16 @@ The checkout is a clean pinned commit. These are the **only** edits, all applied
 
 | # | Path | Change | Affects runtime? |
 |---|---|---|---|
-| 1 | `drivers/misc/mediatek/lcm/ili9881_hd_dsi_vdo_qc_inx_zal1810/ili9881_hd_dsi_vdo_qc_inx_zal1810.c` | `vertical_frontporch` 236 → 16 | **yes — the actual feature** |
+| 1 | `drivers/misc/mediatek/lcm/ili9881_hd_dsi_vdo_qc_inx_zal1810/ili9881_hd_dsi_vdo_qc_inx_zal1810.c` | `vertical_frontporch` per variant: 236 (`stock`), 200/100/60/36/16 (ladder) | **yes — the actual feature** |
 | 2 | same file (variant `72` only) | `PLL_CLOCK` 360 → 376 | **yes — variant 72 only** |
 | 3 | `arch/arm64/configs/RMX1821_defconfig` | `CONFIG_COMPAT_VDSO=y` → not set | no (leaf feature, no ABI/vermagic) |
 | 4 | every `Makefile`, `Kbuild`, `*.mk` containing `-Werror` | `-Werror` → `-Wno-error` (with the hyphen form rewritten to `=`) | no (build strictness only) |
 | 5 | `scripts/Makefile.lib` | `$(srctree)/scripts/dtc/dtc_overlay` → `$(objtree)/scripts/dtc/dtc` | no (host tool path) |
 | 6 | make invocation (`KCFLAGS=...`) | demote/disable noisy warning categories | no (compiler flags) |
+
+The driver has two PLL lines: `365` under `#if (LCM_DSI_CMD_MODE)` and `360` in the video-mode
+branch. This panel is video mode (`LCM_DSI_CMD_MODE = 0`), so **360 is active**; the `sed` for
+variant `72` targets only the 360 line.
 
 Nothing else is touched. In particular:
 
