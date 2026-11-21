@@ -38,6 +38,18 @@ gh run download <run-id> --repo deviknitkkr/rmx1821-kernel-ci -n Image-69hz -D ~
 4. Patches (see below).
 5. Builds `Image.gz` with `make ... Image.gz` (no modules).
 6. Uploads `Image.gz`, `.config` and `report.txt` as an artifact.
+7. Runs a second `repack` job: downloads the pinned Magisk v31.1 APK, extracts the static
+   `magiskboot`, fetches the current Magisk boot image from the `backup-v1` release,
+   swaps only the kernel, verifies `.backup` is still present and the file fits 32 MiB, then
+   uploads `boot-69hz-magisk` / `boot-72hz-magisk` containing a **directly flashable**
+   `boot.img` + `SHA256SUMS`.
+
+Artifacts per run:
+
+| Artifact | Contents |
+|---|---|
+| `Image-<variant>hz` | `Image.gz`, `.config`, `report.txt` |
+| `boot-<variant>hz-magisk` | `boot.img` (kernel swapped into the Magisk boot), `SHA256SUMS` |
 
 Runner: `ubuntu-24.04-arm` (native aarch64; free for public repos). If that label ever
 disappears, switch to `ubuntu-24.04` and add `gcc-aarch64-linux-gnu` plus an explicit

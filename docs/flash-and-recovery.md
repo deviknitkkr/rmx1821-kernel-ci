@@ -27,17 +27,43 @@ A factory-stock boot would have to come from the LineageOS 18.1 ZIP
 - root (`su`), Magisk installed
 - `magiskboot` at `/data/adb/magisk/magiskboot`
 - battery above ~50% (a power loss mid-write corrupts `boot`)
-- the artifact downloaded: `~/kernel-out/Image.gz`
+- the artifacts downloaded (see below)
+- optionally the base boot image for a local repack
 
-## 1. Download the artifact
+## 1. Download the artifacts
+
+The workflow now produces a **flashable image already**:
 
 ```bash
 gh run list --repo deviknitkkr/rmx1821-kernel-ci --workflow build.yml --limit 5
-gh run download <run-id> --repo deviknitkkr/rmx1821-kernel-ci -n Image-69hz -D ~/kernel-out
-ls -l ~/kernel-out/Image.gz
+gh run download <run-id> --repo deviknitkkr/rmx1821-kernel-ci \
+  -n boot-69hz-magisk -D ~/boot-out
+ls -l ~/boot-out
+sha256sum -c ~/boot-out/SHA256SUMS
 ```
 
-## 2. Repack into the Magisk boot
+The kernel-only artifact is still available as `-n Image-69hz`
+(`Image.gz` + `.config` + `report.txt`).
+
+## 2. Get a flashable boot image
+
+### Option A — use the CI-repacked image (default)
+
+`boot-out/boot.img` already has the new kernel inside the Magisk-patched boot, and the CI
+verified `.backup`, the kernel contents and the 32 MiB limit.
+
+One extra check: confirm the base it was built from is still the boot partition the phone
+runs. The release asset's hash is
+`b5c65e5975f27b44bdfdccbf999b35b503d570b14cc014bb0962f102ba7b800c`:
+
+```bash
+su -c 'dd if=/dev/block/by-name/boot bs=1M 2>/dev/null' | sha256sum
+```
+
+If it matches, skip to step 3. If it **differs** (Magisk was re-patched, an OTA landed,
+etc.), use Option B so the ramdisk is the live one.
+
+### Option B — repack locally from the live boot
 
 ```bash
 su -c '
@@ -55,6 +81,8 @@ current directory. Only `kernel` was replaced; the Magisk ramdisk is untouched.
 
 ## 3. Verify before flashing (not optional)
 
+Even with Option A, re-run this on the phone:
+
 ```bash
 su -c '
   rm -rf /data/local/tmp/verify && mkdir -p /data/local/tmp/verify &&
@@ -65,6 +93,8 @@ su -c '
   stat -c "size=%s" new-boot.img
 '
 ```
+
+(With Option A, copy `~/boot-out/boot.img` to `/data/local/tmp/repack/new-boot.img` first.)
 
 Expected:
 

@@ -190,3 +190,85 @@ jobs:
             src/out/.config
             src/report.txt
           if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Repack the freshly built kernel into the phone's *current* Magisk-patched
+  # boot image. This is what would otherwise be done by hand on the phone with
+  # /data/adb/magisk/magiskboot. The output is a directly flashable boot.img.
+  # ---------------------------------------------------------------------------
+  repack:
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+
+    steps:
+      - name: Download Image.gz
+        uses: actions/download-artifact@v4
+        with:
+          name: Image-${{ inputs.variant }}hz
+          path: in
+
+      - name: Fetch pinned magiskboot
+        run: |
+          set -euo pipefail
+          # Same Magisk version as installed on the phone (v31.1). The APK's
+          # lib/arm64-v8a/libmagiskboot.so is a static executable.
+          curl -fsSL -o magisk.apk \
+            https://github.com/topjohnwu/Magisk/releases/download/v31.1/Magisk-v31.1.apk
+          echo "89cefac0a318afa39fb3880c45c87b036c05bc1ebf02a7a715b7f8d7c26ac6e7  magisk.apk" \
+            | sha256sum -c -
+          unzip -o -j magisk.apk lib/arm64-v8a/libmagiskboot.so -d .
+          mv libmagiskboot.so magiskboot
+          chmod +x magiskboot
+          ./magiskboot 2>&1 | head -2
+
+      - name: Repack kernel into the Magisk boot
+        run: |
+          set -euo pipefail
+          # Base image = the exact boot partition the phone runs today.
+          curl -fsSL -o base.img \
+            https://github.com/deviknitkkr/rmx1821-kernel-ci/releases/download/backup-v1/boot_current_magisk_RMX1821.img
+          echo "b5c65e5975f27b44bdfdccbf999b35b503d570b14cc014bb0962f102ba7b800c  base.img" \
+            | sha256sum -c -
+
+          mkdir -p repack && cd repack
+          cp ../base.img .
+          ../magiskboot unpack base.img
+          cp ../in/Image.gz kernel
+          ../magiskboot repack base.img boot.img
+
+          sha256sum boot.img | tee SHA256SUMS
+          stat -c "size=%s" boot.img
+
+      - name: Verify Magisk and kernel survived
+        run: |
+          set -euo pipefail
+          mkdir -p verify && cd verify
+          cp ../repack/boot.img .
+          ../magiskboot unpack boot.img
+
+          echo "--- header ---"
+          ../magiskboot unpack -h boot.img
+
+          test "$(../magiskboot cpio ramdisk.cpio 'exists .backup')" = "true"
+          echo "magisk .backup: present"
+
+          # magiskboot may recompress the kernel blob; compare contents.
+          K1=$(gzip -dc kernel | sha256sum | cut -d' ' -f1)
+          K2=$(gzip -dc ../in/Image.gz | sha256sum | cut -d' ' -f1)
+          echo "kernel(inside)=$K1"
+          echo "Image.gz     =$K2"
+          test "$K1" = "$K2"
+
+          size=$(stat -c %s boot.img)
+          test "$size" -le 33554432
+          echo "size=$size (<= 33554432)"
+
+      - name: Upload flashable boot image
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-${{ inputs.variant }}hz-magisk
+          path: |
+            repack/boot.img
+            repack/SHA256SUMS
+          if-no-files-found: error
