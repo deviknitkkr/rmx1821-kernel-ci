@@ -121,11 +121,18 @@ jobs:
           sed -i "s/params->dsi.PLL_CLOCK = 360;/params->dsi.PLL_CLOCK = $PLL;/" "$F"
           M=drivers/misc/mediatek/video/mt6771/videox/mtkfb.c
           sed -i "s/primary_display_init(mtkfb_find_lcm_driver(), lcd_fps, is_lcm_inited)/primary_display_init(mtkfb_find_lcm_driver(), $FPS, is_lcm_inited)/" "$M"
+          # HWC1 asks the kernel for the vsync fps (DISP_IOCTL_GET_VSYNC_FPS).
+          # That path returns a hardcoded 60 unless ARR is enabled; point it at
+          # the panel rate so SurfaceFlinger paces at the new rate.
+          P=drivers/misc/mediatek/video/mt6771/videox/primary_display.c
+          HZ=$((FPS / 100))
+          sed -i "/not idle and not support ARR/{n;s/return 60;/return $HZ;/}" "$P"
 
           echo "=== effective panel values ==="
-          echo "variant=$VARIANT vfp=$VFP pll=$PLL fps=$FPS"
+          echo "variant=$VARIANT vfp=$VFP pll=$PLL fps=$FPS hz=$HZ"
           grep -nE "vertical_frontporch = |PLL_CLOCK = " "$F"
           grep -n "primary_display_init(" "$M"
+          grep -n -A1 "not idle and not support ARR" "$P" | tail -3
 
           echo "=== config baseline ==="
           grep -n "COMPAT_VDSO" arch/arm64/configs/RMX1821_defconfig
