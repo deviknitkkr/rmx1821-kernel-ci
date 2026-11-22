@@ -233,6 +233,17 @@ jobs:
           name: Image-${{ inputs.variant }}hz
           path: in
 
+      - name: Normalize artifact paths
+        run: |
+          set -euo pipefail
+          # upload-artifact keeps the workspace-relative path (src/out/...).
+          IMG=$(find in -name Image.gz -type f | head -1)
+          test -n "$IMG"
+          mkdir -p kernel-in
+          cp "$IMG" kernel-in/Image.gz
+          ls -l kernel-in/Image.gz
+          sha256sum kernel-in/Image.gz
+
       - name: Fetch pinned magiskboot
         run: |
           set -euo pipefail
@@ -260,7 +271,7 @@ jobs:
           mkdir -p repack && cd repack
           cp ../base.img .
           ../magiskboot unpack base.img
-          cp ../in/Image.gz kernel
+          cp ../kernel-in/Image.gz kernel
           ../magiskboot repack base.img boot.img
 
           sha256sum boot.img | tee SHA256SUMS
@@ -282,7 +293,7 @@ jobs:
 
           # magiskboot unpack writes the raw (decompressed) kernel blob.
           K1=$(sha256sum kernel | cut -d' ' -f1)
-          K2=$(gzip -dc ../in/Image.gz | sha256sum | cut -d' ' -f1)
+          K2=$(gzip -dc ../kernel-in/Image.gz | sha256sum | cut -d' ' -f1)
           echo "kernel(inside)=$K1"
           echo "Image.gz     =$K2"
           test "$K1" = "$K2"
