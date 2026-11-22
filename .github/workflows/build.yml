@@ -19,7 +19,7 @@ on:
       variant:
         description: "stock=59.94, 50=report probe (stock timing, reports 50Hz), 61=vfp200, 65=vfp100, 66=vfp60, 68=vfp36, 69=vfp16, 72=vfp16+PLL376"
         type: choice
-        options: ["stock", "50", "61", "65", "66", "68", "69", "72"]
+        options: ["stock", "50", "61", "65", "66", "68", "69", "72", "69p", "69q"]
         default: "stock"
 
 permissions:
@@ -119,6 +119,11 @@ jobs:
             68)    VFP=36;  PLL=360; FPS=6767 ;;  # ~67.6 Hz
             69)    VFP=16;  PLL=360; FPS=6855 ;;  # ~68.5 Hz
             72)    VFP=16;  PLL=376; FPS=7160 ;;  # ~71.5 Hz
+            # 69 Hz while keeping touch-safe blanking: raise PLL instead of
+            # shrinking vfp. vfp=236 keeps stock VBI; vfp=200 matches the
+            # already-proven 61 Hz blanking. Both target ~69 Hz.
+            69p)   VFP=236; PLL=413; FPS=6900 ;;  # ~69 Hz, stock VBI
+            69q)   VFP=200; PLL=405; FPS=6900 ;;  # ~69 Hz, 61 Hz VBI
             *) echo "unknown variant: $VARIANT"; exit 1 ;;
           esac
           sed -i "s/params->dsi.vertical_frontporch = 236;/params->dsi.vertical_frontporch = $VFP;/" "$F"
