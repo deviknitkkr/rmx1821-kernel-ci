@@ -17,9 +17,9 @@ on:
   workflow_dispatch:
     inputs:
       variant:
-        description: "stock=59.94, 61=vfp200, 65=vfp100, 66=vfp60, 68=vfp36, 69=vfp16, 72=vfp16+PLL376"
+        description: "stock=59.94, 50=report probe (stock timing, reports 50Hz), 61=vfp200, 65=vfp100, 66=vfp60, 68=vfp36, 69=vfp16, 72=vfp16+PLL376"
         type: choice
-        options: ["stock", "61", "65", "66", "68", "69", "72"]
+        options: ["stock", "50", "61", "65", "66", "68", "69", "72"]
         default: "stock"
 
 permissions:
@@ -109,6 +109,10 @@ jobs:
           # pacing at 60 Hz even though the panel scans faster.
           case "$VARIANT" in
             stock) VFP=236; PLL=360; FPS=6002 ;;  # 59.94 Hz (control)
+            # Diagnostic: keep the panel at stock 60 Hz but report 50 Hz.
+            # If HWC follows it, its 60 Hz limit is a >60 clamp; if it still
+            # says 16666667, HWC ignores the kernel report entirely.
+            50)    VFP=236; PLL=360; FPS=5000 ;;  # report 50 Hz, panel 60 Hz
             61)    VFP=200; PLL=360; FPS=6127 ;;  # ~61.2 Hz
             65)    VFP=100; PLL=360; FPS=6503 ;;  # ~64.9 Hz
             66)    VFP=60;  PLL=360; FPS=6666 ;;  # ~66.6 Hz
@@ -127,12 +131,19 @@ jobs:
           P=drivers/misc/mediatek/video/mt6771/videox/primary_display.c
           HZ=$((FPS / 100))
           sed -i "/not idle and not support ARR/{n;s/return 60;/return $HZ;/}" "$P"
+          # Two more informational 60 Hz hardcodes that HWC1 may read. The
+          # lcm_refresh_rate assignment also appears in the suspend paths;
+          # keep them consistent so a screen off/on cannot reset the report.
+          sed -i "s/pgc->lcm_refresh_rate = 60;/pgc->lcm_refresh_rate = $HZ;/g" "$P"
+          sed -i "/int primary_display_get_lcm_max_refresh_rate(void)/,/^}/ s/return 60;/return $HZ;/" "$P"
 
           echo "=== effective panel values ==="
           echo "variant=$VARIANT vfp=$VFP pll=$PLL fps=$FPS hz=$HZ"
           grep -nE "vertical_frontporch = |PLL_CLOCK = " "$F"
           grep -n "primary_display_init(" "$M"
           grep -n -A1 "not idle and not support ARR" "$P" | tail -3
+          grep -n "pgc->lcm_refresh_rate = " "$P" | head
+          grep -n -A6 "int primary_display_get_lcm_max_refresh_rate" "$P"
 
           echo "=== config baseline ==="
           grep -n "COMPAT_VDSO" arch/arm64/configs/RMX1821_defconfig
