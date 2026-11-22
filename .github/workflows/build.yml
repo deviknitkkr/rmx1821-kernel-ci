@@ -350,18 +350,31 @@ jobs:
             echo "=== injecting perf ramdisk init ==="
             # zram and lz4 are already built into the kernel. Stock init does
             # not create/enable a zram swap device, so do it from init.rc.
-            # No executable script or new SELinux domain is needed: mkswap/
-            # swapon/write are Android init builtins.
+            # Android init has no mkswap/swapon builtins, so use a tiny ramdisk
+            # shell script invoked as a oneshot init exec in the init domain.
             printf '%s\n' \
               'on post-fs' \
-              '    write /sys/block/zram0/comp_algorithm lz4' \
-              '    write /sys/block/zram0/disksize 1073741824' \
-              '    mkswap /dev/block/zram0' \
-              '    swapon /dev/block/zram0' \
-              '    write /proc/sys/vm/swappiness 100' \
-              '    write /proc/sys/vm/page-cluster 0' \
+              '    exec u:r:init:s0 root root -- /system/bin/sh /init.perf.sh' \
               > init.perf.rc
+            printf '%s\n' \
+              '#!/system/bin/sh' \
+              'i=0' \
+              'while [ ! -e /dev/block/zram0 ] && [ $i -lt 10 ]; do' \
+              '    sleep 1' \
+              '    i=$((i + 1))' \
+              'done' \
+              '[ -e /dev/block/zram0 ] || exit 0' \
+              'echo lz4 > /sys/block/zram0/comp_algorithm' \
+              'echo 1073741824 > /sys/block/zram0/disksize' \
+              'if ! grep -q /dev/block/zram0 /proc/swaps; then' \
+              '    if command -v mkswap >/dev/null 2>&1; then mkswap /dev/block/zram0; else toybox mkswap /dev/block/zram0; fi' \
+              '    if command -v swapon >/dev/null 2>&1; then swapon /dev/block/zram0; else toybox swapon /dev/block/zram0; fi' \
+              'fi' \
+              'echo 100 > /proc/sys/vm/swappiness' \
+              'echo 0 > /proc/sys/vm/page-cluster' \
+              > init.perf.sh
             ../magiskboot cpio ramdisk.cpio "add 0750 init.perf.rc init.perf.rc"
+            ../magiskboot cpio ramdisk.cpio "add 0750 init.perf.sh init.perf.sh"
             ../magiskboot cpio ramdisk.cpio "extract init.rc init.rc.work"
             sed -i '1i import /init.perf.rc' init.rc.work
             ../magiskboot cpio ramdisk.cpio "rm init.rc"
@@ -392,7 +405,8 @@ jobs:
 
           if [ "$VARIANT" = "perf" ]; then
             ../magiskboot cpio ramdisk.cpio "exists init.perf.rc"
-            echo "init.perf.rc: present"
+            ../magiskboot cpio ramdisk.cpio "exists init.perf.sh"
+            echo "init.perf.rc + init.perf.sh: present"
           fi
 
           # magiskboot unpack writes the raw (decompressed) kernel blob.
