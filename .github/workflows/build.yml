@@ -103,22 +103,29 @@ jobs:
           F=drivers/misc/mediatek/lcm/ili9881_hd_dsi_vdo_qc_inx_zal1810/ili9881_hd_dsi_vdo_qc_inx_zal1810.c
           # Conservative ladder: the panel bootlooped at vfp 16, so test stock first,
           # then step down. vtotal = 1532 + vfp (vsa 4 + vbp 8 + active 1520).
+          # FPS is the panel rate in 0.01 Hz that mtkfb reports to HWC through
+          # DISP_IOCTL_GET_SESSION_INFO (vsyncFPS = pgc->lcm_fps). Without this,
+          # the kernel still reports LK's stock fps=6002 tag and Android keeps
+          # pacing at 60 Hz even though the panel scans faster.
           case "$VARIANT" in
-            stock) VFP=236; PLL=360 ;;  # 59.94 Hz (control)
-            61)    VFP=200; PLL=360 ;;  # ~61.2 Hz
-            65)    VFP=100; PLL=360 ;;  # ~64.9 Hz
-            66)    VFP=60;  PLL=360 ;;  # ~66.6 Hz
-            68)    VFP=36;  PLL=360 ;;  # ~67.6 Hz
-            69)    VFP=16;  PLL=360 ;;  # ~68.5 Hz
-            72)    VFP=16;  PLL=376 ;;  # ~71.5 Hz
+            stock) VFP=236; PLL=360; FPS=6002 ;;  # 59.94 Hz (control)
+            61)    VFP=200; PLL=360; FPS=6127 ;;  # ~61.2 Hz
+            65)    VFP=100; PLL=360; FPS=6503 ;;  # ~64.9 Hz
+            66)    VFP=60;  PLL=360; FPS=6666 ;;  # ~66.6 Hz
+            68)    VFP=36;  PLL=360; FPS=6767 ;;  # ~67.6 Hz
+            69)    VFP=16;  PLL=360; FPS=6855 ;;  # ~68.5 Hz
+            72)    VFP=16;  PLL=376; FPS=7160 ;;  # ~71.5 Hz
             *) echo "unknown variant: $VARIANT"; exit 1 ;;
           esac
           sed -i "s/params->dsi.vertical_frontporch = 236;/params->dsi.vertical_frontporch = $VFP;/" "$F"
           sed -i "s/params->dsi.PLL_CLOCK = 360;/params->dsi.PLL_CLOCK = $PLL;/" "$F"
+          M=drivers/misc/mediatek/video/mt6771/videox/mtkfb.c
+          sed -i "s/primary_display_init(mtkfb_find_lcm_driver(), lcd_fps, is_lcm_inited)/primary_display_init(mtkfb_find_lcm_driver(), $FPS, is_lcm_inited)/" "$M"
 
           echo "=== effective panel values ==="
-          echo "variant=$VARIANT vfp=$VFP pll=$PLL"
+          echo "variant=$VARIANT vfp=$VFP pll=$PLL fps=$FPS"
           grep -nE "vertical_frontporch = |PLL_CLOCK = " "$F"
+          grep -n "primary_display_init(" "$M"
 
           echo "=== config baseline ==="
           grep -n "COMPAT_VDSO" arch/arm64/configs/RMX1821_defconfig
