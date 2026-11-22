@@ -136,10 +136,14 @@ jobs:
           # AOSP clang-r353983c and GCC 4.9 prebuilts. LD/AR/NM/OBJCOPY...
           # default to the matching aarch64-linux-android-* binutils from
           # that GCC prebuilt, i.e. the original 2021 build's toolchain.
+          # CLANG_TRIPLE must be the GNU triple: Makefile ~548 runs
+          # scripts/clang-android.sh and aborts if clang defines __ANDROID__
+          # ("Clang with Android --target detected"). CROSS_COMPILE keeps the
+          # Android binutils (GCC 4.9 prebuilt), which the tree expects.
           ARGS=(
             ARCH=arm64
             CC=clang
-            CLANG_TRIPLE=aarch64-linux-android-
+            CLANG_TRIPLE=aarch64-linux-gnu-
             CROSS_COMPILE=aarch64-linux-android-
             CROSS_COMPILE_ARM32=arm-linux-androideabi-
           )
