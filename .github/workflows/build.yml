@@ -17,9 +17,9 @@ on:
   workflow_dispatch:
     inputs:
       variant:
-        description: "stock=59.94, 50=report probe (stock timing, reports 50Hz), 61=vfp200, 65=vfp100, 66=vfp60, 68=vfp36, 69=vfp16, 72=vfp16+PLL376"
+        description: "stock=59.94, perf=stock timing+zram/lz4+BBR+interactive+deadline I/O, 50=report probe, 61=vfp200, 65=vfp100, 66=vfp60, 68=vfp36, 69=vfp16, 72=vfp16+PLL376"
         type: choice
-        options: ["stock", "50", "61", "65", "66", "68", "69", "72", "69p", "69q"]
+        options: ["stock", "perf", "50", "61", "65", "66", "68", "69", "72", "69p", "69q"]
         default: "stock"
 
 permissions:
@@ -109,6 +109,8 @@ jobs:
           # pacing at 60 Hz even though the panel scans faster.
           case "$VARIANT" in
             stock) VFP=236; PLL=360; FPS=6002 ;;  # 59.94 Hz (control)
+            # Low-risk performance variant: display/touch timing stays stock.
+            perf)  VFP=236; PLL=360; FPS=6002 ;;  # 59.94 Hz + perf config
             # Diagnostic: keep the panel at stock 60 Hz but report 50 Hz.
             # If HWC follows it, its 60 Hz limit is a >60 clamp; if it still
             # says 16666667, HWC ignores the kernel report entirely.
@@ -153,6 +155,44 @@ jobs:
           echo "=== config baseline ==="
           grep -n "COMPAT_VDSO" arch/arm64/configs/RMX1821_defconfig
           git status --short
+
+      # -----------------------------------------------------------------------
+      # Low-risk performance config. No voltage/current/overclock changes and
+      # no panel-timing changes. zram + lz4 are already compiled in this tree;
+      # the repack job activates zram from ramdisk init.rc.
+      # -----------------------------------------------------------------------
+      - name: Apply perf-lite config
+        working-directory: src
+        env:
+          VARIANT: ${{ inputs.variant }}
+        run: |
+          set -euo pipefail
+          if [ "$VARIANT" != "perf" ]; then
+            echo "variant=$VARIANT: no perf config changes"
+            exit 0
+          fi
+
+          D=arch/arm64/configs/RMX1821_defconfig
+
+          # Interactive governor is a standard in-tree governor: more eager
+          # ramp-up than schedutil, but no custom voltage tables or OPP edits.
+          sed -i 's/^# CONFIG_CPU_FREQ_GOV_INTERACTIVE is not set$/CONFIG_CPU_FREQ_GOV_INTERACTIVE=y/' "$D"
+          sed -i 's/^CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y$/# CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL is not set/' "$D"
+          sed -i 's/^# CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE is not set$/CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE=y/' "$D"
+
+          # Deadline is already built in; switching the default away from CFQ
+          # is a conservative storage/responsiveness change.
+          sed -i 's/^CONFIG_DEFAULT_IOSCHED="cfq"$/CONFIG_DEFAULT_IOSCHED="deadline"/' "$D"
+
+          # BBR is in-tree on 4.14 but disabled in stock. It only affects
+          # network pacing; it does not touch display/touch charging paths.
+          sed -i 's/^# CONFIG_TCP_CONG_BBR is not set$/CONFIG_TCP_CONG_BBR=y/' "$D"
+          sed -i 's/^CONFIG_DEFAULT_TCP_CONG="bic"$/CONFIG_DEFAULT_TCP_CONG="bbr"/' "$D"
+
+          echo "=== perf config diff ==="
+          git diff -- "$D"
+          echo "=== effective config lines ==="
+          grep -nE 'CONFIG_ZRAM=|CONFIG_SWAP=|CONFIG_CRYPTO_LZ4=|CONFIG_LZ4_(COMPRESS|DECOMPRESS)=|CONFIG_CPU_FREQ_GOV_INTERACTIVE=|CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE=|CONFIG_DEFAULT_IOSCHED=|CONFIG_TCP_CONG_BBR=|CONFIG_DEFAULT_TCP_CONG=' "$D"
 
       - name: Build Image.gz
         working-directory: src
@@ -228,6 +268,8 @@ jobs:
             echo "defconfig_sha256: $(sha256sum arch/arm64/configs/RMX1821_defconfig | cut -d' ' -f1)"
             echo "--- panel timing ---"
             grep -nE "vertical_frontporch = |PLL_CLOCK = " "$F" || true
+            echo "--- perf config ---"
+            grep -E 'CONFIG_ZRAM=|CONFIG_SWAP=|CONFIG_CRYPTO_LZ4=|CONFIG_LZ4_(COMPRESS|DECOMPRESS)=|CONFIG_CPU_FREQ_GOV_INTERACTIVE=|CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE=|CONFIG_DEFAULT_IOSCHED=|CONFIG_TCP_CONG_BBR=|CONFIG_DEFAULT_TCP_CONG=' arch/arm64/configs/RMX1821_defconfig || true
             echo "--- exported symbol CRCs (__crc_*) ---"
             nm out/vmlinux 2>/dev/null | awk '$2 ~ /^[Aa]$/ && $3 ~ /^__crc_/ {print substr($3,7), $1}' | sort || true
           } > report.txt
@@ -255,6 +297,8 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      VARIANT: ${{ inputs.variant }}
 
     steps:
       - name: Download Image.gz
@@ -301,6 +345,31 @@ jobs:
           mkdir -p repack && cd repack
           cp ../base.img .
           ../magiskboot unpack base.img
+
+          if [ "$VARIANT" = "perf" ]; then
+            echo "=== injecting perf ramdisk init ==="
+            # zram and lz4 are already built into the kernel. Stock init does
+            # not create/enable a zram swap device, so do it from init.rc.
+            # No executable script or new SELinux domain is needed: mkswap/
+            # swapon/write are Android init builtins.
+            cat > init.perf.rc <<'EOF'
+on post-fs
+    write /sys/block/zram0/comp_algorithm lz4
+    write /sys/block/zram0/disksize 1073741824
+    mkswap /dev/block/zram0
+    swapon /dev/block/zram0
+    write /proc/sys/vm/swappiness 100
+    write /proc/sys/vm/page-cluster 0
+EOF
+            ../magiskboot cpio ramdisk.cpio "add 0750 init.perf.rc init.perf.rc"
+            ../magiskboot cpio ramdisk.cpio "extract init.rc init.rc.work"
+            sed -i '1i import /init.perf.rc' init.rc.work
+            ../magiskboot cpio ramdisk.cpio "rm init.rc"
+            ../magiskboot cpio ramdisk.cpio "add 0750 init.rc init.rc.work"
+            ../magiskboot cpio ramdisk.cpio "exists init.perf.rc"
+            echo "init.perf.rc injected"
+          fi
+
           cp ../kernel-in/Image.gz kernel
           ../magiskboot repack base.img boot.img
 
@@ -320,6 +389,11 @@ jobs:
           # rc=0 only if the entry exists (this magiskboot prints nothing).
           ../magiskboot cpio ramdisk.cpio "exists .backup"
           echo "magisk .backup: present"
+
+          if [ "$VARIANT" = "perf" ]; then
+            ../magiskboot cpio ramdisk.cpio "exists init.perf.rc"
+            echo "init.perf.rc: present"
+          fi
 
           # magiskboot unpack writes the raw (decompressed) kernel blob.
           K1=$(sha256sum kernel | cut -d' ' -f1)
